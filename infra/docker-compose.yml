@@ -1,0 +1,26 @@
+services:
+  redis:
+    image: redis:8
+    container_name: documentation-collab-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+
+  mysql:
+    image: mysql:8.4
+    container_name: documentation-collab-mysql
+    profiles: ["mysql"]
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: documentation_collab
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ../packages/shared-contract/sql/schema.mysql.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+
+volumes:
+  redis-data:
+  mysql-data:

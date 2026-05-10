@@ -1,0 +1,39 @@
+openapi: 3.1.0
+info:
+  title: Documentation Collaboration API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+    description: Java backend
+  - url: http://localhost:8081
+    description: Go backend
+paths:
+  /api/auth/register:
+    post:
+      summary: Register a user
+  /api/auth/login:
+    post:
+      summary: Login and return a JWT
+  /api/me:
+    get:
+      summary: Return the authenticated user
+  /api/documents:
+    get:
+      summary: List documents visible to the authenticated user
+    post:
+      summary: Create a document
+  /api/documents/{docId}:
+    get:
+      summary: Get a document
+    patch:
+      summary: Rename a document
+    delete:
+      summary: Soft delete a document
+  /api/documents/{docId}/shares:
+    get:
+      summary: List document shares
+    post:
+      summary: Share document with a user by email
+  /api/documents/{docId}/shares/{userId}:
+    delete:
+      summary: Remove a user's access

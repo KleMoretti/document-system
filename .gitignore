@@ -1,0 +1,15 @@
+node_modules/
+dist/
+target/
+bin/
+*.log
+*.tmp
+.env
+.env.local
+.cache/
+.idea/
+.vscode/
+*.iml
+dump.rdb
+.playwright-mcp/
+*.tsbuildinfo
