@@ -1,6 +1,6 @@
 # 在线文档协同编辑系统
 
-这个仓库是一套 monorepo：
+这个仓库是一个 monorepo：
 
 - `apps/web`: React + TypeScript + Vite 前端
 - `apps/backend-java`: Java 21 + Spring Boot 后端
@@ -13,11 +13,12 @@
 优先使用本机环境：
 
 - Java: 21.0.4 LTS
+- Maven: `D:\apache-maven-3.8.9`
 - Go: 1.24.13
 - Node.js: 20.20.2
 - npm: 10.8.2
 - MySQL: 8.4.7
-- Redis: `D:\Redis`, 默认 `127.0.0.1:6379`
+- Redis: `D:\Redis`，默认 `127.0.0.1:6379`
 
 ## Redis
 
@@ -27,10 +28,10 @@
 D:\Redis\start.bat
 ```
 
-或使用同样的相对配置路径手动启动：
+或手动启动：
 
 ```powershell
-cd /d D:\Redis
+Set-Location D:\Redis
 .\redis-server.exe redis.conf
 ```
 
@@ -48,37 +49,69 @@ docker compose -f infra/docker-compose.yml up redis
 
 ## MySQL
 
+本机 root 密码按当前环境使用 `123456`。
+
 创建数据库：
 
-```sql
-CREATE DATABASE IF NOT EXISTS documentation_collab
-  CHARACTER SET utf8mb4
-  COLLATE utf8mb4_0900_ai_ci;
+```powershell
+mysql -u root -p123456 -e "CREATE DATABASE IF NOT EXISTS documentation_collab CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
 ```
 
 执行 schema：
 
 ```powershell
-mysql -u root -p documentation_collab < packages/shared-contract/sql/schema.mysql.sql
+mysql -u root -p123456 documentation_collab -e "source D:/@Java/documentation/packages/shared-contract/sql/schema.mysql.sql"
 ```
 
-## 启动
-
-前端连接 Java 后端：
+## 启动 Java 后端
 
 ```powershell
-copy apps\web\.env.java apps\web\.env.local
+Set-Location D:\@Java\documentation\apps\backend-java
+$env:MYSQL_USER='root'
+$env:MYSQL_PASSWORD='123456'
+$env:MYSQL_DATABASE='documentation_collab'
+$env:REDIS_HOST='127.0.0.1'
+$env:REDIS_PORT='6379'
+D:\apache-maven-3.8.9\bin\mvn.cmd spring-boot:run
+```
+
+## 启动 Go 后端
+
+```powershell
+Set-Location D:\@Java\documentation\apps\backend-go
+$env:MYSQL_USER='root'
+$env:MYSQL_PASSWORD='123456'
+$env:MYSQL_DATABASE='documentation_collab'
+$env:REDIS_HOST='127.0.0.1'
+$env:REDIS_PORT='6379'
+go run .
+```
+
+## 启动前端
+
+连接 Java 后端：
+
+```powershell
+Set-Location D:\@Java\documentation
 npm install
-npm run dev:web
-npm run dev:java
+npm --prefix apps/web run dev -- --mode java
 ```
 
-前端连接 Go 后端：
+连接 Go 后端：
 
 ```powershell
-copy apps\web\.env.go apps\web\.env.local
-npm run dev:web
-npm run dev:go
+Set-Location D:\@Java\documentation
+npm install
+npm --prefix apps/web run dev -- --mode go
+```
+
+## 验证命令
+
+```powershell
+npm run test:web
+npm run build:web
+go test ./...
+D:\apache-maven-3.8.9\bin\mvn.cmd test
 ```
 
 ## 端口

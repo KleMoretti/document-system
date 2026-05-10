@@ -58,7 +58,11 @@ public class AuthController {
     if (authorization == null || !authorization.startsWith("Bearer ")) {
       throw new UnauthorizedException("Missing bearer token.");
     }
-    return jwtManager.verify(authorization.substring("Bearer ".length()));
+    try {
+      return jwtManager.verify(authorization.substring("Bearer ".length()));
+    } catch (IllegalArgumentException ex) {
+      throw new UnauthorizedException("Invalid bearer token.");
+    }
   }
 
   private boolean blank(String value) {

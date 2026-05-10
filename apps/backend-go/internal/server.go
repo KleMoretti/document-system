@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
@@ -262,7 +263,18 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	_ = json.NewEncoder(w).Encode(normalizeJSONValue(value))
+}
+
+func normalizeJSONValue(value any) any {
+	if value == nil {
+		return value
+	}
+	reflected := reflect.ValueOf(value)
+	if reflected.Kind() == reflect.Slice && reflected.IsNil() {
+		return reflect.MakeSlice(reflected.Type(), 0, 0).Interface()
+	}
+	return value
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
