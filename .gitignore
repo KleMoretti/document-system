@@ -13,3 +13,4 @@ bin/
 dump.rdb
 .playwright-mcp/
 *.tsbuildinfo
+apps/backend-go/internal/redis.go.519832936791327278
