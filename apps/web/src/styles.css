@@ -191,6 +191,28 @@ button:focus-visible,
   gap: 8px;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.import-button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed #8aa4c8;
+  border-radius: 6px;
+  background: #f7fbff;
+  color: #1f3f6d;
+  font-weight: 700;
+}
+
 .filter-stack,
 .document-column,
 .side-panels,

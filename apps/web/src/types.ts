@@ -32,6 +32,17 @@ export type ApiError = {
   message: string;
 };
 
+export type ImportFormat = 'markdown' | 'html' | 'text';
+
+export type ExportFormat = 'markdown' | 'html' | 'text' | 'pdf';
+
+export type PendingImport = {
+  docId: string;
+  title: string;
+  format: ImportFormat;
+  html: string;
+};
+
 export type DocumentStatus = 'active' | 'deleted';
 
 export type DocumentVersionSummary = {

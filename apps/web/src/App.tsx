@@ -1,9 +1,18 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { ArchiveRestore, FileText, LogOut, Plus, RefreshCcw, Share2, Trash2 } from 'lucide-react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ArchiveRestore, FileText, FileUp, LogOut, Plus, RefreshCcw, Share2, Trash2 } from 'lucide-react';
 import { api } from './api';
 import { CollaborativeEditor } from './CollaborativeEditor';
 import { API_BASE } from './config';
-import type { CommentThread, DocumentStatus, DocumentSummary, DocumentVersionSummary, Share, User } from './types';
+import { importFileToNewDocument } from './documentFormats';
+import type {
+  CommentThread,
+  DocumentStatus,
+  DocumentSummary,
+  DocumentVersionSummary,
+  PendingImport,
+  Share,
+  User
+} from './types';
 
 type AuthMode = 'login' | 'register';
 
@@ -30,6 +39,8 @@ export function App() {
   const [comments, setComments] = useState<CommentThread[]>([]);
   const [commentBody, setCommentBody] = useState('');
   const [editorRevision, setEditorRevision] = useState(0);
+  const [pendingImport, setPendingImport] = useState<PendingImport | undefined>();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedRole = selected?.role ?? 'viewer';
   const isDeleted = Boolean(selected?.deletedAt);
@@ -65,7 +76,7 @@ export function App() {
       return;
     }
     void loadDocumentSidebars(token, selected.id);
-  }, [isDeleted, selected?.id, token]);
+  }, [canShare, isDeleted, selected?.id, token]);
 
   const sortedDocuments = useMemo(
     () => [...documents].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -130,6 +141,27 @@ export function App() {
     setDocuments((current) => [doc, ...current]);
     setSelected(doc);
     setNewTitle('新文档');
+  }
+
+  async function importDocument(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!token || !file) {
+      return;
+    }
+    setError(null);
+    try {
+      const { doc, pendingImport: nextImport } = await importFileToNewDocument(file, (title) =>
+        api.createDocument(token, title)
+      );
+      setDocuments((current) => [doc, ...current]);
+      setSelected(doc);
+      setPendingImport(nextImport);
+      setStatusFilter('active');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '导入失败');
+    } finally {
+      event.target.value = '';
+    }
   }
 
   async function renameSelected(event: FormEvent) {
@@ -285,6 +317,18 @@ export function App() {
           </button>
         </form>
 
+        <input
+          ref={fileInputRef}
+          className="visually-hidden"
+          type="file"
+          accept=".md,.markdown,.html,.htm,.txt"
+          onChange={importDocument}
+        />
+        <button className="import-button" type="button" onClick={() => fileInputRef.current?.click()}>
+          <FileUp size={16} />
+          导入 Markdown / HTML / TXT
+        </button>
+
         <div className="filter-stack">
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题" aria-label="搜索标题" />
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as DocumentStatus)} aria-label="文档状态">
@@ -366,6 +410,10 @@ export function App() {
                     token={token}
                     readOnly={!canEdit}
                     displayName={user.displayName}
+                    initialImport={pendingImport?.docId === selected.id ? pendingImport : undefined}
+                    onInitialImportApplied={(docId) => {
+                      setPendingImport((current) => (current?.docId === docId ? undefined : current));
+                    }}
                   />
                 )}
               </div>

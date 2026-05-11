@@ -19,6 +19,13 @@ Roles:
 
 Environment switching is owned by the frontend `.env.local` file.
 
+Document formats:
+
+- The backend remains format-agnostic and persists the canonical collaborative Yjs state.
+- Markdown, HTML, and TXT import/export are frontend boundary conversions.
+- PDF export is a frontend browser print flow; PDF import is intentionally out of scope.
+- Imported files always create a new document and never overwrite an existing collaborative document.
+
 Documents:
 
 - `GET /api/documents` accepts `query` for title search and `status=active|deleted`; omitted `status` means `active`.

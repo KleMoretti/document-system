@@ -5,6 +5,8 @@ import Collaboration from '@tiptap/extension-collaboration';
 import Placeholder from '@tiptap/extension-placeholder';
 import * as Y from 'yjs';
 import { WS_BASE } from './config';
+import { htmlToMarkdown, htmlToText, shouldApplyInitialImport } from './documentFormats';
+import type { ExportFormat, PendingImport } from './types';
 
 type SocketMessage = {
   type: string;
@@ -23,9 +25,18 @@ type Props = {
   token: string;
   readOnly: boolean;
   displayName: string;
+  initialImport?: PendingImport;
+  onInitialImportApplied?: (docId: string) => void;
 };
 
-export function CollaborativeEditor({ docId, token, readOnly, displayName }: Props) {
+export function CollaborativeEditor({
+  docId,
+  token,
+  readOnly,
+  displayName,
+  initialImport,
+  onInitialImportApplied
+}: Props) {
   const ydoc = useMemo(() => new Y.Doc(), [docId]);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'offline'>('connecting');
   const [online, setOnline] = useState<Record<string, number>>({});
@@ -53,6 +64,10 @@ export function CollaborativeEditor({ docId, token, readOnly, displayName }: Pro
   }, [editor, readOnly]);
 
   useEffect(() => {
+    if (!editor) {
+      return;
+    }
+
     let socket: WebSocket | null = null;
     let reconnectTimer: number | null = null;
     let cancelled = false;
@@ -92,6 +107,10 @@ export function CollaborativeEditor({ docId, token, readOnly, displayName }: Pro
         const msg = JSON.parse(event.data as string) as SocketMessage;
         if (msg.type === 'sync:init') {
           msg.updates?.forEach((update) => Y.applyUpdate(ydoc, base64ToBytes(update), 'remote'));
+          if (shouldApplyInitialImport(initialImport, docId, msg.updates)) {
+            editor.commands.setContent(initialImport!.html);
+            onInitialImportApplied?.(docId);
+          }
         }
         if (msg.type === 'sync:update' && msg.update) {
           Y.applyUpdate(ydoc, base64ToBytes(msg.update), 'remote');
@@ -125,7 +144,7 @@ export function CollaborativeEditor({ docId, token, readOnly, displayName }: Pro
       ydoc.off('update', onUpdate);
       socket?.close();
     };
-  }, [displayName, docId, readOnly, token, ydoc]);
+  }, [displayName, docId, editor, initialImport, onInitialImportApplied, readOnly, token, ydoc]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -139,16 +158,29 @@ export function CollaborativeEditor({ docId, token, readOnly, displayName }: Pro
 
   const onlineNames = Object.keys(online);
 
-  function exportFile(kind: 'html' | 'md') {
+  function exportFile(format: ExportFormat) {
     if (!editor) {
       return;
     }
-    const content = kind === 'html' ? editor.getHTML() : editor.getText({ blockSeparator: '\n\n' });
-    const blob = new Blob([content], { type: kind === 'html' ? 'text/html;charset=utf-8' : 'text/markdown;charset=utf-8' });
+    const html = editor.getHTML();
+    if (format === 'pdf') {
+      printHtml(html);
+      return;
+    }
+    const content =
+      format === 'html' ? html : format === 'markdown' ? htmlToMarkdown(html) : htmlToText(html);
+    const extension = format === 'markdown' ? 'md' : format === 'text' ? 'txt' : 'html';
+    const type =
+      format === 'html'
+        ? 'text/html;charset=utf-8'
+        : format === 'markdown'
+          ? 'text/markdown;charset=utf-8'
+          : 'text/plain;charset=utf-8';
+    const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `document-${docId}.${kind}`;
+    link.download = `document-${docId}.${extension}`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -161,7 +193,9 @@ export function CollaborativeEditor({ docId, token, readOnly, displayName }: Pro
         {readOnly && <span className="readonly-badge">只读</span>}
         <span className="presence">{onlineNames.length > 0 ? `在线：${onlineNames.join('、')}` : '等待协作者'}</span>
         <button type="button" onClick={() => exportFile('html')}>导出 HTML</button>
-        <button type="button" onClick={() => exportFile('md')}>导出 Markdown</button>
+        <button type="button" onClick={() => exportFile('markdown')}>导出 Markdown</button>
+        <button type="button" onClick={() => exportFile('text')}>导出 TXT</button>
+        <button type="button" onClick={() => exportFile('pdf')}>导出 PDF</button>
       </div>
       <EditorContent editor={editor} />
     </section>
@@ -170,6 +204,30 @@ export function CollaborativeEditor({ docId, token, readOnly, displayName }: Pro
 
 export function shouldReconnectAfterSocketError(code?: string): boolean {
   return code !== 'UNAUTHORIZED' && code !== 'FORBIDDEN' && code !== 'INVALID_DOCUMENT_ID';
+}
+
+function printHtml(html: string) {
+  const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700');
+  if (!printWindow) {
+    window.print();
+    return;
+  }
+  printWindow.document.write(`
+    <!doctype html>
+    <html>
+      <head>
+        <title>Export PDF</title>
+        <style>
+          body { color: #172033; font-family: Georgia, 'Times New Roman', serif; line-height: 1.7; padding: 32px; }
+          h1, h2, h3 { line-height: 1.25; }
+        </style>
+      </head>
+      <body>${html}</body>
+    </html>
+  `);
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.print();
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

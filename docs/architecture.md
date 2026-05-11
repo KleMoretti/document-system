@@ -22,3 +22,4 @@ Productized collaboration features build on the same contract:
 - Soft-deleted documents remain recoverable by owners.
 - Versions store the server-persisted Yjs update sequence at save time. Restoring a version replaces the persisted sequence; active clients should reopen the document to load the restored state.
 - Comments are stored in MySQL through REST APIs. WebSocket comment events are lightweight invalidation hints rather than the source of truth.
+- File format support is handled at the frontend boundary. Markdown, HTML, and TXT imports are converted into editor content before Yjs persistence; HTML, Markdown, TXT, and PDF exports are generated from the current editor content.
