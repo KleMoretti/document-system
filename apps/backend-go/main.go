@@ -14,6 +14,9 @@ import (
 
 func main() {
 	cfg := internal.LoadConfig()
+	if cfg.JWTSecret == "" || cfg.JWTSecret == "change-this-development-secret" {
+		log.Fatal("JWT_SECRET must be set to a non-default value")
+	}
 	db, err := sql.Open("mysql", cfg.MySQLDSN())
 	if err != nil {
 		log.Fatalf("open mysql: %v", err)

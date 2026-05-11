@@ -72,6 +72,8 @@ $env:MYSQL_PASSWORD='123456'
 $env:MYSQL_DATABASE='documentation_collab'
 $env:REDIS_HOST='127.0.0.1'
 $env:REDIS_PORT='6379'
+$env:JWT_SECRET='local-documentation-secret-please-change'
+$env:ALLOWED_ORIGINS='http://localhost:5173,http://127.0.0.1:5173'
 D:\apache-maven-3.8.9\bin\mvn.cmd spring-boot:run
 ```
 
@@ -84,8 +86,12 @@ $env:MYSQL_PASSWORD='123456'
 $env:MYSQL_DATABASE='documentation_collab'
 $env:REDIS_HOST='127.0.0.1'
 $env:REDIS_PORT='6379'
+$env:JWT_SECRET='local-documentation-secret-please-change'
+$env:ALLOWED_ORIGINS='http://localhost:5173,http://127.0.0.1:5173'
 go run .
 ```
+
+`JWT_SECRET` 必须显式设置，不能使用默认开发密钥；`ALLOWED_ORIGINS` 控制 REST CORS 和 WebSocket Origin 白名单。
 
 ## 启动前端
 

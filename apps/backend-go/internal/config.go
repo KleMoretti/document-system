@@ -6,32 +6,34 @@ import (
 )
 
 type Config struct {
-	HTTPAddr      string
-	MySQLHost     string
-	MySQLPort     string
-	MySQLDatabase string
-	MySQLUser     string
-	MySQLPassword string
-	RedisHost     string
-	RedisPort     string
-	RedisPassword string
-	JWTSecret     string
-	InstanceID    string
+	HTTPAddr       string
+	MySQLHost      string
+	MySQLPort      string
+	MySQLDatabase  string
+	MySQLUser      string
+	MySQLPassword  string
+	RedisHost      string
+	RedisPort      string
+	RedisPassword  string
+	JWTSecret      string
+	AllowedOrigins string
+	InstanceID     string
 }
 
 func LoadConfig() Config {
 	return Config{
-		HTTPAddr:      env("GO_HTTP_ADDR", ":8081"),
-		MySQLHost:     env("MYSQL_HOST", "127.0.0.1"),
-		MySQLPort:     env("MYSQL_PORT", "3306"),
-		MySQLDatabase: env("MYSQL_DATABASE", "documentation_collab"),
-		MySQLUser:     env("MYSQL_USER", "root"),
-		MySQLPassword: env("MYSQL_PASSWORD", ""),
-		RedisHost:     env("REDIS_HOST", "127.0.0.1"),
-		RedisPort:     env("REDIS_PORT", "6379"),
-		RedisPassword: env("REDIS_PASSWORD", ""),
-		JWTSecret:     env("JWT_SECRET", "change-this-development-secret"),
-		InstanceID:    NewID(),
+		HTTPAddr:       env("GO_HTTP_ADDR", ":8081"),
+		MySQLHost:      env("MYSQL_HOST", "127.0.0.1"),
+		MySQLPort:      env("MYSQL_PORT", "3306"),
+		MySQLDatabase:  env("MYSQL_DATABASE", "documentation_collab"),
+		MySQLUser:      env("MYSQL_USER", "root"),
+		MySQLPassword:  env("MYSQL_PASSWORD", ""),
+		RedisHost:      env("REDIS_HOST", "127.0.0.1"),
+		RedisPort:      env("REDIS_PORT", "6379"),
+		RedisPassword:  env("REDIS_PASSWORD", ""),
+		JWTSecret:      env("JWT_SECRET", ""),
+		AllowedOrigins: env("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
+		InstanceID:     NewID(),
 	}
 }
 

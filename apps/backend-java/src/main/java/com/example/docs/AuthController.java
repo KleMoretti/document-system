@@ -1,6 +1,7 @@
 package com.example.docs;
 
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -40,7 +41,12 @@ public class AuthController {
 
   @PostMapping("/auth/login")
   AuthResponse login(@RequestBody LoginRequest req) {
-    var user = repository.findUserForLogin(req.email());
+    AppRepository.LoginUser user;
+    try {
+      user = repository.findUserForLogin(req.email());
+    } catch (EmptyResultDataAccessException ex) {
+      throw new UnauthorizedException("Email or password is incorrect.");
+    }
     if (!passwordEncoder.matches(req.password(), user.passwordHash())) {
       throw new UnauthorizedException("Email or password is incorrect.");
     }

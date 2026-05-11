@@ -26,6 +26,12 @@ public class ErrorAdvice {
     return new ApiError("VALIDATION_ERROR", ex.getMessage());
   }
 
+  @ExceptionHandler(UserNotFoundException.class)
+  @ResponseStatus(HttpStatus.NOT_FOUND)
+  ApiError userNotFound(UserNotFoundException ex) {
+    return new ApiError("USER_NOT_FOUND", ex.getMessage());
+  }
+
   @ExceptionHandler(EmptyResultDataAccessException.class)
   @ResponseStatus(HttpStatus.NOT_FOUND)
   ApiError notFound() {
@@ -47,6 +53,12 @@ class ForbiddenException extends RuntimeException {
 
 class BadRequestException extends RuntimeException {
   BadRequestException(String message) {
+    super(message);
+  }
+}
+
+class UserNotFoundException extends RuntimeException {
+  UserNotFoundException(String message) {
     super(message);
   }
 }

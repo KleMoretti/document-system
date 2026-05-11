@@ -20,6 +20,19 @@ paths:
   /api/documents:
     get:
       summary: List documents visible to the authenticated user
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+          description: Optional title search.
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, deleted]
+            default: active
+          description: List active documents by default or soft-deleted documents for recovery.
     post:
       summary: Create a document
   /api/documents/{docId}:
@@ -29,6 +42,48 @@ paths:
       summary: Rename a document
     delete:
       summary: Soft delete a document
+  /api/documents/{docId}/restore:
+    post:
+      summary: Restore a soft-deleted document
+  /api/documents/{docId}/versions:
+    get:
+      summary: List saved document versions
+    post:
+      summary: Save the current persisted Yjs update sequence as a document version
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label:
+                  type: string
+  /api/documents/{docId}/versions/{versionId}:
+    get:
+      summary: Get a saved document version and its base64 Yjs updates
+  /api/documents/{docId}/versions/{versionId}/restore:
+    post:
+      summary: Restore persisted document updates from a saved version
+  /api/documents/{docId}/comments:
+    get:
+      summary: List document comment threads
+    post:
+      summary: Create a document comment
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+  /api/documents/{docId}/comments/{commentId}/replies:
+    post:
+      summary: Add a reply to a comment thread
+  /api/documents/{docId}/comments/{commentId}:
+    patch:
+      summary: Update comment body or resolved state
   /api/documents/{docId}/shares:
     get:
       summary: List document shares
