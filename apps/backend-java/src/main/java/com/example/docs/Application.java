@@ -23,6 +23,9 @@ public class Application {
 
   @Bean
   JwtManager jwtManager(@Value("${app.jwt-secret}") String secret) {
+    if (secret == null || secret.isBlank() || "change-this-development-secret".equals(secret)) {
+      throw new IllegalStateException("JWT_SECRET must be set to a non-default value.");
+    }
     return new JwtManager(secret, Duration.ofHours(24));
   }
 
@@ -38,13 +41,18 @@ public class Application {
   }
 
   @Bean
-  WebMvcConfigurer cors() {
+  WebMvcConfigurer cors(@Value("${app.allowed-origins}") String allowedOrigins) {
+    var origins =
+        java.util.Arrays.stream(allowedOrigins.split(","))
+            .map(String::trim)
+            .filter(value -> !value.isBlank())
+            .toArray(String[]::new);
     return new WebMvcConfigurer() {
       @Override
       public void addCorsMappings(CorsRegistry registry) {
         registry
             .addMapping("/api/**")
-            .allowedOrigins("*")
+            .allowedOrigins(origins)
             .allowedHeaders("Authorization", "Content-Type")
             .allowedMethods("GET", "POST", "PATCH", "DELETE", "OPTIONS");
       }

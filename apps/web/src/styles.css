@@ -17,7 +17,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -112,7 +113,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   min-height: 44px;
   width: 100%;
   border: 1px solid #cad4e1;
@@ -122,8 +124,14 @@ select {
   padding: 10px 12px;
 }
 
+textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
 input:focus,
 select:focus,
+textarea:focus,
 button:focus-visible,
 .editor-surface:focus {
   outline: 3px solid rgba(37, 99, 235, 0.22);
@@ -181,6 +189,18 @@ button:focus-visible,
   display: grid;
   grid-template-columns: minmax(0, 1fr) 44px;
   gap: 8px;
+}
+
+.filter-stack,
+.document-column,
+.side-panels,
+.rename-row {
+  display: grid;
+  gap: 10px;
+}
+
+.rename-row {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .document-list {
@@ -318,6 +338,10 @@ button:focus-visible,
   padding: 18px;
 }
 
+.side-panels {
+  align-self: start;
+}
+
 .share-panel form {
   display: grid;
   gap: 12px;
@@ -336,6 +360,36 @@ button:focus-visible,
   min-height: 42px;
   border-top: 1px solid #e2e8f0;
   padding-top: 8px;
+}
+
+.version-item,
+.comment-item {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 10px;
+}
+
+.version-item button,
+.comment-item button,
+.editor-status button {
+  min-height: 32px;
+  border: 1px solid #d7e0ec;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #23324a;
+  padding: 6px 10px;
+}
+
+.comment-item.resolved {
+  opacity: 0.68;
+}
+
+.readonly-badge {
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  padding: 2px 8px;
 }
 
 .share-item button {

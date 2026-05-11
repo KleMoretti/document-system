@@ -32,17 +32,34 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
   @Override
   public void afterConnectionEstablished(WebSocketSession session) throws Exception {
     var docId = docId(session);
-    var claims = jwtManager.verify(query(session.getUri(), "token"));
-    var role = repository.getRole(claims.userId(), docId);
     session.getAttributes().put("docId", docId);
+    UserClaims claims;
+    String role;
+    try {
+      claims = jwtManager.verify(query(session.getUri(), "token"));
+    } catch (RuntimeException ex) {
+      reject(session, "UNAUTHORIZED", "Invalid or missing token.");
+      return;
+    }
+    try {
+      role = repository.getRole(claims.userId(), docId);
+    } catch (RuntimeException ex) {
+      reject(session, "FORBIDDEN", "You cannot access this document.");
+      return;
+    }
     session.getAttributes().put("userId", claims.userId());
     session.getAttributes().put("role", role);
-    sessions.computeIfAbsent(docId, ignored -> ConcurrentHashMap.newKeySet()).add(session);
 
     var updates = new ArrayList<String>();
-    for (byte[] update : repository.loadUpdates(docId)) {
-      updates.add(Base64.getEncoder().encodeToString(update));
+    try {
+      for (byte[] update : repository.loadUpdates(docId)) {
+        updates.add(Base64.getEncoder().encodeToString(update));
+      }
+    } catch (RuntimeException ex) {
+      reject(session, "SYNC_INIT_FAILED", "Could not load document state.");
+      return;
     }
+    sessions.computeIfAbsent(docId, ignored -> ConcurrentHashMap.newKeySet()).add(session);
     session.sendMessage(new TextMessage(mapper.writeValueAsString(new WsMessage("sync:init", docId, null, null, null, null, updates, null, null))));
   }
 
@@ -96,6 +113,14 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
     redisBus.publish(docId, body);
   }
 
+  public void broadcastCommentEvent(String docId, String type, String commentId) {
+    try {
+      var outgoing = mapper.createObjectNode().put("type", type).put("docId", docId).put("commentId", commentId);
+      broadcast(docId, outgoing);
+    } catch (Exception ignored) {
+    }
+  }
+
   private void broadcastRemote(String docId, JsonNode body) {
     try {
       broadcastLocal(docId, mapper.writeValueAsString(body));
@@ -114,6 +139,13 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
   private void sendError(WebSocketSession session, String code, String message) throws Exception {
     var docId = (String) session.getAttributes().get("docId");
     session.sendMessage(new TextMessage(mapper.writeValueAsString(new WsMessage("error", docId, null, null, null, null, null, code, message))));
+  }
+
+  private void reject(WebSocketSession session, String code, String message) throws Exception {
+    if (session.isOpen()) {
+      sendError(session, code, message);
+      session.close(CloseStatus.NOT_ACCEPTABLE);
+    }
   }
 
   private String docId(WebSocketSession session) {

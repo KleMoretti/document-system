@@ -11,7 +11,8 @@ spring:
       mode: never
 
 app:
-  jwt-secret: ${JWT_SECRET:change-this-development-secret}
+  jwt-secret: ${JWT_SECRET:}
   redis-host: ${REDIS_HOST:127.0.0.1}
   redis-port: ${REDIS_PORT:6379}
   redis-password: ${REDIS_PASSWORD:}
+  allowed-origins: ${ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}

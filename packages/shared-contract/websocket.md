@@ -64,3 +64,31 @@
   "message": "You do not have access to this document."
 }
 ```
+
+## Comment Events
+
+Comments are persisted through REST. Backends may broadcast these events to active document clients after comment mutations; clients must ignore unknown event types for forward compatibility.
+
+```json
+{
+  "type": "comment:created",
+  "docId": "uuid",
+  "commentId": "uuid"
+}
+```
+
+```json
+{
+  "type": "comment:updated",
+  "docId": "uuid",
+  "commentId": "uuid"
+}
+```
+
+```json
+{
+  "type": "comment:resolved",
+  "docId": "uuid",
+  "commentId": "uuid"
+}
+```
