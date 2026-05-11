@@ -8,6 +8,7 @@ import java.util.Base64;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -16,6 +17,9 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 @Component
 public class DocumentSocketHandler extends TextWebSocketHandler {
+  static final int MAX_UPDATE_BYTES = 1024 * 1024;
+  private static final Pattern UUID_PATTERN =
+      Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
   private final AppRepository repository;
   private final JwtManager jwtManager;
   private final RedisBus redisBus;
@@ -31,7 +35,13 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
 
   @Override
   public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-    var docId = docId(session);
+    String docId;
+    try {
+      docId = docId(session);
+    } catch (RuntimeException ex) {
+      reject(session, "INVALID_DOCUMENT_ID", "Document id must be a UUID.");
+      return;
+    }
     session.getAttributes().put("docId", docId);
     UserClaims claims;
     String role;
@@ -77,7 +87,12 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
         return;
       }
       var encoded = node.path("update").asText();
-      repository.appendUpdate(docId, Base64.getDecoder().decode(encoded));
+      var update = Base64.getDecoder().decode(encoded);
+      if (update.length > MAX_UPDATE_BYTES) {
+        sendError(session, "UPDATE_TOO_LARGE", "Update is too large.");
+        return;
+      }
+      repository.appendUpdate(docId, update);
       var outgoing =
           mapper.createObjectNode()
               .put("type", "sync:update")
@@ -113,9 +128,14 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
     redisBus.publish(docId, body);
   }
 
-  public void broadcastCommentEvent(String docId, String type, String commentId) {
+  public void broadcastCommentEvent(String docId, String type, CommentThread comment) {
     try {
-      var outgoing = mapper.createObjectNode().put("type", type).put("docId", docId).put("commentId", commentId);
+      var outgoing =
+          mapper.createObjectNode()
+              .put("type", type)
+              .put("docId", docId)
+              .put("commentId", comment.id())
+              .set("comment", mapper.valueToTree(comment));
       broadcast(docId, outgoing);
     } catch (Exception ignored) {
     }
@@ -150,7 +170,11 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
 
   private String docId(WebSocketSession session) {
     var path = session.getUri().getPath();
-    return path.substring(path.lastIndexOf('/') + 1);
+    var id = path.substring(path.lastIndexOf('/') + 1);
+    if (!UUID_PATTERN.matcher(id).matches()) {
+      throw new BadRequestException("Document id must be a UUID.");
+    }
+    return id;
   }
 
   private String query(URI uri, String key) {

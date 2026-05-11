@@ -196,6 +196,7 @@ public class AppRepository {
 
   @Transactional
   public void appendUpdate(String docId, byte[] update) {
+    lockDocument(docId);
     var seq =
         jdbc.queryForObject(
             "SELECT COALESCE(MAX(seq), 0) + 1 FROM document_updates WHERE document_id = ? FOR UPDATE",
@@ -265,6 +266,7 @@ public class AppRepository {
   @Transactional
   public void restoreVersion(String docId, String versionId) {
     var version = getVersion(docId, versionId);
+    lockDocument(docId);
     jdbc.update("DELETE FROM document_updates WHERE document_id = ?", docId);
     long seq = 1;
     for (String update : version.updates()) {
@@ -276,6 +278,10 @@ public class AppRepository {
       seq += 1;
     }
     jdbc.update("UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", docId);
+  }
+
+  private void lockDocument(String docId) {
+    jdbc.queryForObject("SELECT id FROM documents WHERE id = ? FOR UPDATE", String.class, docId);
   }
 
   public List<CommentThread> listComments(String docId) {

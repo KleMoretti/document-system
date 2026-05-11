@@ -209,6 +209,9 @@ func (s *Store) AppendUpdate(ctx context.Context, docID string, update []byte) e
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockDocument(ctx, tx, docID); err != nil {
+		return err
+	}
 
 	var nextSeq int64
 	row := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(seq), 0) + 1 FROM document_updates WHERE document_id = ? FOR UPDATE", docID)
@@ -326,6 +329,9 @@ func (s *Store) RestoreVersion(ctx context.Context, docID, versionID string) err
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockDocument(ctx, tx, docID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM document_updates WHERE document_id = ?", docID); err != nil {
 		return err
 	}
@@ -344,6 +350,11 @@ func (s *Store) RestoreVersion(ctx context.Context, docID, versionID string) err
 		return err
 	}
 	return tx.Commit()
+}
+
+func lockDocument(ctx context.Context, tx *sql.Tx, docID string) error {
+	var id string
+	return tx.QueryRowContext(ctx, "SELECT id FROM documents WHERE id = ? FOR UPDATE", docID).Scan(&id)
 }
 
 func (s *Store) ListComments(ctx context.Context, docID string) ([]CommentThread, error) {

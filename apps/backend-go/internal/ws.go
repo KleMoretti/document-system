@@ -14,17 +14,20 @@ import (
 )
 
 type WSMessage struct {
-	Type        string   `json:"type"`
-	DocID       string   `json:"docId"`
-	UserID      string   `json:"userId,omitempty"`
-	DisplayName string   `json:"displayName,omitempty"`
-	Color       string   `json:"color,omitempty"`
-	Update      string   `json:"update,omitempty"`
-	Updates     []string `json:"updates,omitempty"`
-	CommentID   string   `json:"commentId,omitempty"`
-	Code        string   `json:"code,omitempty"`
-	Message     string   `json:"message,omitempty"`
+	Type        string         `json:"type"`
+	DocID       string         `json:"docId"`
+	UserID      string         `json:"userId,omitempty"`
+	DisplayName string         `json:"displayName,omitempty"`
+	Color       string         `json:"color,omitempty"`
+	Update      string         `json:"update,omitempty"`
+	Updates     []string       `json:"updates,omitempty"`
+	CommentID   string         `json:"commentId,omitempty"`
+	Comment     *CommentThread `json:"comment,omitempty"`
+	Code        string         `json:"code,omitempty"`
+	Message     string         `json:"message,omitempty"`
 }
+
+const maxUpdateBytes = 1024 * 1024
 
 type Client struct {
 	docID     string
@@ -74,6 +77,7 @@ func (h *Hub) BroadcastRaw(docID string, payload []byte) {
 	}
 	h.mu.RUnlock()
 	for _, client := range slowClients {
+		notifySlowClient(client)
 		h.Unregister(client)
 		if client.conn != nil {
 			_ = client.conn.Close()
@@ -157,6 +161,10 @@ func readPump(ctx context.Context, s *Server, client *Client, role string) {
 				sendError(client, "INVALID_UPDATE", "Update must be base64 encoded.")
 				continue
 			}
+			if !updateAllowed(update) {
+				sendError(client, "UPDATE_TOO_LARGE", "Update is too large.")
+				continue
+			}
 			if err := s.store.AppendUpdate(ctx, client.docID, update); err != nil {
 				sendError(client, "DATABASE_ERROR", "Could not persist update.")
 				continue
@@ -182,6 +190,27 @@ func sendError(client *Client, code, message string) {
 	case client.send <- payload:
 	default:
 	}
+}
+
+func notifySlowClient(client *Client) {
+	payload, _ := json.Marshal(WSMessage{Type: "error", DocID: client.docID, Code: "SLOW_CLIENT", Message: "Connection closed because the client is not keeping up."})
+	select {
+	case client.send <- payload:
+		return
+	default:
+	}
+	select {
+	case <-client.send:
+	default:
+	}
+	select {
+	case client.send <- payload:
+	default:
+	}
+}
+
+func updateAllowed(update []byte) bool {
+	return len(update) <= maxUpdateBytes
 }
 
 var idPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)

@@ -173,7 +173,7 @@ public class DocumentController {
       throw new BadRequestException("Comment body is required.");
     }
     var comment = repository.createComment(docId, claims.userId(), req.body().trim());
-    socketHandler.broadcastCommentEvent(docId, "comment:created", comment.id());
+    socketHandler.broadcastCommentEvent(docId, "comment:created", comment);
     return comment;
   }
 
@@ -189,7 +189,7 @@ public class DocumentController {
       throw new BadRequestException("Reply body is required.");
     }
     var comment = repository.addReply(docId, commentId, claims.userId(), req.body().trim());
-    socketHandler.broadcastCommentEvent(docId, "comment:updated", comment.id());
+    socketHandler.broadcastCommentEvent(docId, "comment:updated", comment);
     return comment;
   }
 
@@ -205,7 +205,7 @@ public class DocumentController {
       throw new ForbiddenException("Only editors can update comments.");
     }
     var comment = repository.updateComment(docId, commentId, req);
-    socketHandler.broadcastCommentEvent(docId, req.resolved() == null ? "comment:updated" : "comment:resolved", comment.id());
+    socketHandler.broadcastCommentEvent(docId, req.resolved() == null ? "comment:updated" : "comment:resolved", comment);
     return comment;
   }
 

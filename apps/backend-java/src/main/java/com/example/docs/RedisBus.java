@@ -4,12 +4,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.UUID;
 import java.util.function.BiConsumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.JedisPubSub;
 
 @Component
 public class RedisBus {
+  private static final Logger log = LoggerFactory.getLogger(RedisBus.class);
   private final JedisPooled jedis;
   private final ObjectMapper mapper = new ObjectMapper();
   private final String source = UUID.randomUUID().toString();
@@ -31,7 +34,8 @@ public class RedisBus {
       envelope.put("docId", docId);
       envelope.set("body", body);
       jedis.publish("doc:" + docId, mapper.writeValueAsString(envelope));
-    } catch (Exception ignored) {
+    } catch (Exception ex) {
+      log.warn("Redis publish failed", ex);
     }
   }
 
@@ -47,12 +51,14 @@ public class RedisBus {
                   return;
                 }
                 consumer.accept(node.path("docId").asText(), node.path("body"));
-              } catch (Exception ignored) {
+              } catch (Exception ex) {
+                log.warn("Redis payload ignored", ex);
               }
             }
           },
           "doc:*");
-    } catch (Exception ignored) {
+    } catch (Exception ex) {
+      log.warn("Redis subscription stopped", ex);
     }
   }
 }

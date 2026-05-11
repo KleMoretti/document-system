@@ -338,7 +338,7 @@ func (s *Server) handleComments(w http.ResponseWriter, r *http.Request, doc Docu
 				writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "Could not create comment.")
 				return
 			}
-			broadcast(s, WSMessage{Type: "comment:created", DocID: doc.ID, CommentID: comment.ID})
+			broadcast(s, WSMessage{Type: "comment:created", DocID: doc.ID, CommentID: comment.ID, Comment: &comment})
 			writeJSON(w, http.StatusCreated, comment)
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed.")
@@ -359,7 +359,7 @@ func (s *Server) handleComments(w http.ResponseWriter, r *http.Request, doc Docu
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "Could not create reply.")
 			return
 		}
-		broadcast(s, WSMessage{Type: "comment:updated", DocID: doc.ID, CommentID: comment.ID})
+		broadcast(s, WSMessage{Type: "comment:updated", DocID: doc.ID, CommentID: comment.ID, Comment: &comment})
 		writeJSON(w, http.StatusCreated, comment)
 		return
 	}
@@ -381,7 +381,7 @@ func (s *Server) handleComments(w http.ResponseWriter, r *http.Request, doc Docu
 		if req.Resolved != nil {
 			eventType = "comment:resolved"
 		}
-		broadcast(s, WSMessage{Type: eventType, DocID: doc.ID, CommentID: comment.ID})
+		broadcast(s, WSMessage{Type: eventType, DocID: doc.ID, CommentID: comment.ID, Comment: &comment})
 		writeJSON(w, http.StatusOK, comment)
 		return
 	}

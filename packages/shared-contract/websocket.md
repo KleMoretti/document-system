@@ -73,7 +73,18 @@ Comments are persisted through REST. Backends may broadcast these events to acti
 {
   "type": "comment:created",
   "docId": "uuid",
-  "commentId": "uuid"
+  "commentId": "uuid",
+  "comment": {
+    "id": "uuid",
+    "documentId": "uuid",
+    "authorId": "uuid",
+    "authorName": "Ada",
+    "body": "Looks good",
+    "resolved": false,
+    "createdAt": "2026-05-11T00:00:00Z",
+    "updatedAt": "2026-05-11T00:00:00Z",
+    "replies": []
+  }
 }
 ```
 
@@ -81,7 +92,8 @@ Comments are persisted through REST. Backends may broadcast these events to acti
 {
   "type": "comment:updated",
   "docId": "uuid",
-  "commentId": "uuid"
+  "commentId": "uuid",
+  "comment": {}
 }
 ```
 
@@ -89,6 +101,7 @@ Comments are persisted through REST. Backends may broadcast these events to acti
 {
   "type": "comment:resolved",
   "docId": "uuid",
-  "commentId": "uuid"
+  "commentId": "uuid",
+  "comment": {}
 }
 ```

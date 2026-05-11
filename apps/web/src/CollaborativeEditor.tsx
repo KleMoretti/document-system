@@ -100,6 +100,9 @@ export function CollaborativeEditor({ docId, token, readOnly, displayName }: Pro
           setOnline((current) => ({ ...current, [msg.displayName!]: Date.now() }));
         }
         if (msg.type === 'error') {
+          if (!shouldReconnectAfterSocketError(msg.code)) {
+            cancelled = true;
+          }
           socket?.close();
         }
       });
@@ -163,6 +166,10 @@ export function CollaborativeEditor({ docId, token, readOnly, displayName }: Pro
       <EditorContent editor={editor} />
     </section>
   );
+}
+
+export function shouldReconnectAfterSocketError(code?: string): boolean {
+  return code !== 'UNAUTHORIZED' && code !== 'FORBIDDEN' && code !== 'INVALID_DOCUMENT_ID';
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
