@@ -6,6 +6,7 @@ import {
   htmlToText,
   importFileToNewDocument,
   markdownToHtml,
+  prepareImportFile,
   sanitizeImportedHtml,
   shouldApplyInitialImport,
   textToHtml
@@ -57,6 +58,16 @@ describe('document format conversion', () => {
       docId: 'doc-1',
       title: 'roadmap',
       format: 'markdown'
+    });
+  });
+
+  it('prepares imports for preview before creating documents', async () => {
+    const file = new File(['# Preview'], 'preview.md', { type: 'text/markdown' });
+
+    await expect(prepareImportFile(file)).resolves.toMatchObject({
+      title: 'preview',
+      format: 'markdown',
+      html: '<h1>Preview</h1>'
     });
   });
 

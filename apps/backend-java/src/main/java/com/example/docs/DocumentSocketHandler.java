@@ -5,31 +5,38 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.SubProtocolCapable;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 @Component
-public class DocumentSocketHandler extends TextWebSocketHandler {
+public class DocumentSocketHandler extends TextWebSocketHandler implements SubProtocolCapable {
+  private static final Logger log = LoggerFactory.getLogger(DocumentSocketHandler.class);
   static final int MAX_UPDATE_BYTES = 1024 * 1024;
   private static final Pattern UUID_PATTERN =
       Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
   private final AppRepository repository;
   private final JwtManager jwtManager;
   private final RedisBus redisBus;
+  private final MetricsRegistry metrics;
   private final ObjectMapper mapper = new ObjectMapper();
   private final Map<String, Set<WebSocketSession>> sessions = new ConcurrentHashMap<>();
 
-  public DocumentSocketHandler(AppRepository repository, JwtManager jwtManager, RedisBus redisBus) {
+  public DocumentSocketHandler(AppRepository repository, JwtManager jwtManager, RedisBus redisBus, MetricsRegistry metrics) {
     this.repository = repository;
     this.jwtManager = jwtManager;
     this.redisBus = redisBus;
+    this.metrics = metrics;
     this.redisBus.attach(this::broadcastRemote);
   }
 
@@ -46,7 +53,7 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
     UserClaims claims;
     String role;
     try {
-      claims = jwtManager.verify(query(session.getUri(), "token"));
+      claims = jwtManager.verify(websocketToken(session));
     } catch (RuntimeException ex) {
       reject(session, "UNAUTHORIZED", "Invalid or missing token.");
       return;
@@ -70,6 +77,7 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
       return;
     }
     sessions.computeIfAbsent(docId, ignored -> ConcurrentHashMap.newKeySet()).add(session);
+    metrics.observeWebSocketConnect();
     session.sendMessage(new TextMessage(mapper.writeValueAsString(new WsMessage("sync:init", docId, null, null, null, null, updates, null, null))));
   }
 
@@ -77,6 +85,7 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
   protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
     var node = mapper.readTree(message.getPayload());
     var type = node.path("type").asText();
+    metrics.observeWebSocketMessage(type);
     var docId = (String) session.getAttributes().get("docId");
     var userId = (String) session.getAttributes().get("userId");
     var role = (String) session.getAttributes().get("role");
@@ -119,6 +128,7 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
     var docId = (String) session.getAttributes().get("docId");
     if (docId != null && sessions.containsKey(docId)) {
       sessions.get(docId).remove(session);
+      metrics.observeWebSocketDisconnect();
     }
   }
 
@@ -138,6 +148,7 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
               .set("comment", mapper.valueToTree(comment));
       broadcast(docId, outgoing);
     } catch (Exception ignored) {
+      log.warn("Comment websocket event broadcast failed for document {}", docId, ignored);
     }
   }
 
@@ -145,6 +156,7 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
     try {
       broadcastLocal(docId, mapper.writeValueAsString(body));
     } catch (Exception ignored) {
+      log.warn("Remote websocket broadcast failed for document {}", docId, ignored);
     }
   }
 
@@ -188,5 +200,26 @@ public class DocumentSocketHandler extends TextWebSocketHandler {
       }
     }
     throw new UnauthorizedException("Missing token.");
+  }
+
+  @Override
+  public List<String> getSubProtocols() {
+    return List.of("bearer");
+  }
+
+  private String websocketToken(WebSocketSession session) {
+    var headers = session.getHandshakeHeaders();
+    var protocols = headers == null ? null : headers.get("Sec-WebSocket-Protocol");
+    if (protocols != null) {
+      for (String header : protocols) {
+        var parts = header.split(",");
+        for (int index = 0; index < parts.length - 1; index += 1) {
+          if ("bearer".equals(parts[index].trim()) && !parts[index + 1].trim().isBlank()) {
+            return parts[index + 1].trim();
+          }
+        }
+      }
+    }
+    return query(session.getUri(), "token");
   }
 }

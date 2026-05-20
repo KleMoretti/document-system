@@ -9,6 +9,7 @@
     "test:web": "npm --prefix apps/web run test -- --run",
     "dev:go": "cd apps/backend-go && go run .",
     "test:go": "cd apps/backend-go && go test ./...",
+    "loadtest:ws": "cd apps/backend-go && go run ./cmd/ws-loadtest",
     "dev:java": "cd apps/backend-java && mvn spring-boot:run",
     "test:java": "cd apps/backend-java && mvn test"
   },

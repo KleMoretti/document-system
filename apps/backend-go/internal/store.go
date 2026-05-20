@@ -11,7 +11,8 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db         *sql.DB
+	bcryptCost int
 }
 
 var (
@@ -20,11 +21,18 @@ var (
 )
 
 func NewStore(db *sql.DB) *Store {
-	return &Store{db: db}
+	return NewStoreWithCost(db, bcrypt.DefaultCost)
+}
+
+func NewStoreWithCost(db *sql.DB, bcryptCost int) *Store {
+	if bcryptCost < bcrypt.MinCost || bcryptCost > bcrypt.MaxCost {
+		bcryptCost = bcrypt.DefaultCost
+	}
+	return &Store{db: db, bcryptCost: bcryptCost}
 }
 
 func (s *Store) CreateUser(ctx context.Context, req RegisterRequest) (User, string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), s.bcryptCost)
 	if err != nil {
 		return User{}, "", err
 	}
@@ -369,19 +377,30 @@ func (s *Store) ListComments(ctx context.Context, docID string) ([]CommentThread
 	}
 	defer rows.Close()
 	var comments []CommentThread
+	var commentIDs []string
 	for rows.Next() {
 		var comment CommentThread
 		if err := rows.Scan(&comment.ID, &comment.DocumentID, &comment.AuthorID, &comment.AuthorName, &comment.Body, &comment.Resolved, &comment.CreatedAt, &comment.UpdatedAt); err != nil {
 			return nil, err
 		}
-		replies, err := s.ListReplies(ctx, comment.ID)
-		if err != nil {
-			return nil, err
-		}
-		comment.Replies = replies
+		comment.Replies = []CommentReply{}
+		commentIDs = append(commentIDs, comment.ID)
 		comments = append(comments, comment)
 	}
-	return comments, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	repliesByComment, err := s.ListRepliesForComments(ctx, commentIDs)
+	if err != nil {
+		return nil, err
+	}
+	for index := range comments {
+		comments[index].Replies = repliesByComment[comments[index].ID]
+		if comments[index].Replies == nil {
+			comments[index].Replies = []CommentReply{}
+		}
+	}
+	return comments, nil
 }
 
 func (s *Store) CreateComment(ctx context.Context, docID, userID, body string) (CommentThread, error) {
@@ -455,6 +474,36 @@ func (s *Store) ListReplies(ctx context.Context, commentID string) ([]CommentRep
 		replies = append(replies, reply)
 	}
 	return replies, rows.Err()
+}
+
+func (s *Store) ListRepliesForComments(ctx context.Context, commentIDs []string) (map[string][]CommentReply, error) {
+	result := map[string][]CommentReply{}
+	if len(commentIDs) == 0 {
+		return result, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(commentIDs)), ",")
+	args := make([]any, 0, len(commentIDs))
+	for _, commentID := range commentIDs {
+		args = append(args, commentID)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.id, r.comment_id, r.author_id, u.display_name, r.body, r.created_at
+		FROM document_comment_replies r
+		JOIN users u ON u.id = r.author_id
+		WHERE r.comment_id IN (`+placeholders+`)
+		ORDER BY r.comment_id ASC, r.created_at ASC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var reply CommentReply
+		if err := rows.Scan(&reply.ID, &reply.CommentID, &reply.AuthorID, &reply.AuthorName, &reply.Body, &reply.CreatedAt); err != nil {
+			return nil, err
+		}
+		result[reply.CommentID] = append(result[reply.CommentID], reply)
+	}
+	return result, rows.Err()
 }
 
 type documentScanner interface {

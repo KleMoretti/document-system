@@ -1,15 +1,18 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { ArchiveRestore, FileText, FileUp, LogOut, Plus, RefreshCcw, Share2, Trash2 } from 'lucide-react';
+import { ArchiveRestore, FileText, FileUp, LayoutTemplate, LogOut, Plus, RefreshCcw, Share2, Trash2, X } from 'lucide-react';
 import { api } from './api';
 import { CollaborativeEditor } from './CollaborativeEditor';
 import { API_BASE } from './config';
-import { importFileToNewDocument } from './documentFormats';
+import { documentTemplates, getDocumentTemplate } from './documentTemplates';
+import { pendingImportFromPreparedImport, prepareImportFile } from './documentFormats';
 import type {
   CommentThread,
+  DocumentTemplateId,
   DocumentStatus,
   DocumentSummary,
   DocumentVersionSummary,
   PendingImport,
+  PreparedImport,
   Share,
   User
 } from './types';
@@ -26,6 +29,7 @@ export function App() {
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [newTitle, setNewTitle] = useState('新文档');
+  const [templateId, setTemplateId] = useState<DocumentTemplateId>('blank');
   const [renameTitle, setRenameTitle] = useState('');
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<DocumentStatus>('active');
@@ -40,6 +44,7 @@ export function App() {
   const [commentBody, setCommentBody] = useState('');
   const [editorRevision, setEditorRevision] = useState(0);
   const [pendingImport, setPendingImport] = useState<PendingImport | undefined>();
+  const [preparedImport, setPreparedImport] = useState<PreparedImport | undefined>();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedRole = selected?.role ?? 'viewer';
@@ -143,25 +148,43 @@ export function App() {
     setNewTitle('新文档');
   }
 
+  async function createDocumentFromTemplate() {
+    if (!token) {
+      return;
+    }
+    const template = getDocumentTemplate(templateId);
+    const doc = await api.createDocument(token, template.title);
+    setDocuments((current) => [doc, ...current]);
+    setSelected(doc);
+    setPendingImport(pendingImportFromPreparedImport(doc.id, template));
+    setStatusFilter('active');
+  }
+
   async function importDocument(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (!token || !file) {
+    if (!file) {
       return;
     }
     setError(null);
     try {
-      const { doc, pendingImport: nextImport } = await importFileToNewDocument(file, (title) =>
-        api.createDocument(token, title)
-      );
-      setDocuments((current) => [doc, ...current]);
-      setSelected(doc);
-      setPendingImport(nextImport);
-      setStatusFilter('active');
+      setPreparedImport(await prepareImportFile(file));
     } catch (err) {
       setError(err instanceof Error ? err.message : '导入失败');
     } finally {
       event.target.value = '';
     }
+  }
+
+  async function confirmPreparedImport() {
+    if (!token || !preparedImport) {
+      return;
+    }
+    const doc = await api.createDocument(token, preparedImport.title);
+    setDocuments((current) => [doc, ...current]);
+    setSelected(doc);
+    setPendingImport(pendingImportFromPreparedImport(doc.id, preparedImport));
+    setPreparedImport(undefined);
+    setStatusFilter('active');
   }
 
   async function renameSelected(event: FormEvent) {
@@ -317,6 +340,24 @@ export function App() {
           </button>
         </form>
 
+        <div className="template-picker" aria-label="文档模板">
+          <label>
+            文档模板
+            <select value={templateId} onChange={(event) => setTemplateId(event.target.value as DocumentTemplateId)}>
+              {documentTemplates.map((template) => (
+                <option value={template.id} key={template.id}>
+                  {template.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="muted">{getDocumentTemplate(templateId).description}</p>
+          <button className="import-button" type="button" onClick={() => void createDocumentFromTemplate()}>
+            <LayoutTemplate size={16} />
+            从模板创建
+          </button>
+        </div>
+
         <input
           ref={fileInputRef}
           className="visually-hidden"
@@ -407,6 +448,7 @@ export function App() {
                   <CollaborativeEditor
                     key={`${selected.id}-${editorRevision}`}
                     docId={selected.id}
+                    documentTitle={selected.title}
                     token={token}
                     readOnly={!canEdit}
                     displayName={user.displayName}
@@ -502,6 +544,30 @@ export function App() {
           </div>
         )}
       </section>
+      {preparedImport && (
+        <div className="modal-backdrop" role="presentation">
+          <section className="import-preview" role="dialog" aria-modal="true" aria-label="导入预览">
+            <header className="modal-header">
+              <div>
+                <p className="eyebrow">{preparedImport.format}</p>
+                <h2>导入预览：{preparedImport.title}</h2>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setPreparedImport(undefined)} aria-label="关闭导入预览">
+                <X size={18} />
+              </button>
+            </header>
+            <div className="preview-surface" dangerouslySetInnerHTML={{ __html: preparedImport.html }} />
+            <footer className="modal-actions">
+              <button className="text-button" type="button" onClick={() => setPreparedImport(undefined)}>
+                取消
+              </button>
+              <button className="primary" type="button" onClick={() => void confirmPreparedImport()}>
+                创建并导入
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

@@ -1,6 +1,6 @@
 import { marked } from 'marked';
 import TurndownService from 'turndown';
-import type { DocumentSummary, ImportFormat, PendingImport } from './types';
+import type { DocumentSummary, ImportFormat, PendingImport, PreparedImport } from './types';
 
 const allowedTags = new Set([
   'a',
@@ -72,7 +72,7 @@ export function sanitizeImportedHtml(html: string): string {
     });
   });
 
-  return document.body.innerHTML;
+  return document.body.innerHTML.trim();
 }
 
 export function htmlToMarkdown(html: string): string {
@@ -86,6 +86,10 @@ export function htmlToText(html: string): string {
 }
 
 export async function buildPendingImport(file: File, docId: string): Promise<PendingImport> {
+  return pendingImportFromPreparedImport(docId, await prepareImportFile(file));
+}
+
+export async function prepareImportFile(file: File): Promise<PreparedImport> {
   const format = detectImportFormat(file.name);
   const raw = await readFileText(file);
   const title = titleFromFileName(file.name);
@@ -95,7 +99,11 @@ export async function buildPendingImport(file: File, docId: string): Promise<Pen
       : format === 'html'
         ? sanitizeImportedHtml(raw)
         : textToHtml(raw);
-  return { docId, title, format, html };
+  return { title, format, html };
+}
+
+export function pendingImportFromPreparedImport(docId: string, preparedImport: PreparedImport): PendingImport {
+  return { docId, ...preparedImport };
 }
 
 function readFileText(file: File): Promise<string> {

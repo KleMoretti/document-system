@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"strings"
@@ -10,27 +11,40 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+const maxRequestBodyBytes = 1 << 20
+
 type Server struct {
-	cfg   Config
-	store *Store
-	auth  *JWTManager
-	hub   *Hub
-	bus   *RedisBus
+	cfg     Config
+	store   *Store
+	auth    *JWTManager
+	hub     *Hub
+	bus     *RedisBus
+	metrics *Metrics
 }
 
 func NewServer(cfg Config, store *Store, auth *JWTManager, hub *Hub, bus *RedisBus) *Server {
-	return &Server{cfg: cfg, store: store, auth: auth, hub: hub, bus: bus}
+	return &Server{cfg: cfg, store: store, auth: auth, hub: hub, bus: bus, metrics: NewMetrics()}
 }
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/auth/register", s.withCORS(s.register))
-	mux.HandleFunc("/api/auth/login", s.withCORS(s.login))
-	mux.HandleFunc("/api/me", s.withCORS(s.requireAuth(s.me)))
-	mux.HandleFunc("/api/documents", s.withCORS(s.requireAuth(s.documents)))
-	mux.HandleFunc("/api/documents/", s.withCORS(s.requireAuth(s.documentByID)))
+	mux.HandleFunc("/metrics", s.metricsEndpoint)
+	mux.Handle("/api/auth/register", s.metrics.Middleware(http.HandlerFunc(s.withCORS(s.register))))
+	mux.Handle("/api/auth/login", s.metrics.Middleware(http.HandlerFunc(s.withCORS(s.login))))
+	mux.Handle("/api/me", s.metrics.Middleware(http.HandlerFunc(s.withCORS(s.requireAuth(s.me)))))
+	mux.Handle("/api/documents", s.metrics.Middleware(http.HandlerFunc(s.withCORS(s.requireAuth(s.documents)))))
+	mux.Handle("/api/documents/", s.metrics.Middleware(http.HandlerFunc(s.withCORS(s.requireAuth(s.documentByID)))))
 	mux.HandleFunc("/ws/documents/", s.websocket)
 	return mux
+}
+
+func (s *Server) metricsEndpoint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed.")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = w.Write([]byte(s.metrics.Render()))
 }
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +231,6 @@ func (s *Server) handleDocument(w http.ResponseWriter, r *http.Request, doc Docu
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed.")
 	}
-	_ = claims
 }
 
 func (s *Server) handleShares(w http.ResponseWriter, r *http.Request, doc Document, parts []string) {
@@ -421,7 +434,13 @@ func (s *Server) withCORS(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, target any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(target); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			writeError(w, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "Request body is too large.")
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "INVALID_JSON", "Request body must be valid JSON.")
 		return false
 	}

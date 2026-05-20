@@ -36,6 +36,16 @@ export type ImportFormat = 'markdown' | 'html' | 'text';
 
 export type ExportFormat = 'markdown' | 'html' | 'text' | 'pdf';
 
+export type ExportStyleId = 'clean' | 'report' | 'compact';
+
+export type DocumentTemplateId = 'blank' | 'meeting-notes' | 'project-plan' | 'weekly-report';
+
+export type PreparedImport = {
+  title: string;
+  format: ImportFormat;
+  html: string;
+};
+
 export type PendingImport = {
   docId: string;
   title: string;

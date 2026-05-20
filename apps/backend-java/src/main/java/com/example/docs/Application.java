@@ -8,6 +8,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import redis.clients.jedis.DefaultJedisClientConfig;
+import redis.clients.jedis.HostAndPort;
 import redis.clients.jedis.JedisPooled;
 
 @SpringBootApplication
@@ -17,27 +19,29 @@ public class Application {
   }
 
   @Bean
-  BCryptPasswordEncoder passwordEncoder() {
-    return new BCryptPasswordEncoder();
+  BCryptPasswordEncoder passwordEncoder(@Value("${app.bcrypt-cost}") int bcryptCost) {
+    return new BCryptPasswordEncoder(bcryptCost);
   }
 
   @Bean
-  JwtManager jwtManager(@Value("${app.jwt-secret}") String secret) {
+  JwtManager jwtManager(@Value("${app.jwt-secret}") String secret, @Value("${app.jwt-ttl}") Duration ttl) {
     if (secret == null || secret.isBlank() || "change-this-development-secret".equals(secret)) {
       throw new IllegalStateException("JWT_SECRET must be set to a non-default value.");
     }
-    return new JwtManager(secret, Duration.ofHours(24));
+    return new JwtManager(secret, ttl);
   }
 
   @Bean
   JedisPooled jedis(
       @Value("${app.redis-host}") String host,
       @Value("${app.redis-port}") int port,
-      @Value("${app.redis-password}") String password) {
-    if (password == null || password.isBlank()) {
-      return new JedisPooled(host, port);
+      @Value("${app.redis-password}") String password,
+      @Value("${app.redis-tls}") boolean redisTls) {
+    var builder = DefaultJedisClientConfig.builder().ssl(redisTls);
+    if (password != null && !password.isBlank()) {
+      builder.password(password);
     }
-    return new JedisPooled(host, port, null, password);
+    return new JedisPooled(new HostAndPort(host, port), builder.build());
   }
 
   @Bean

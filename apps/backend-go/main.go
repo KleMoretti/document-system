@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 
@@ -27,8 +26,8 @@ func main() {
 		log.Fatalf("ping mysql: %v", err)
 	}
 
-	store := internal.NewStore(db)
-	auth := internal.NewJWTManager(cfg.JWTSecret, 24*time.Hour)
+	store := internal.NewStoreWithCost(db, cfg.BcryptCost)
+	auth := internal.NewJWTManager(cfg.JWTSecret, cfg.JWTTTL)
 	hub := internal.NewHub(cfg.InstanceID)
 	redisBus := internal.NewRedisBus(cfg, hub)
 	go redisBus.Run(context.Background())

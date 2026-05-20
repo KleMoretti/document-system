@@ -30,6 +30,18 @@ func TestOriginAllowedAcceptsConfiguredOrigin(t *testing.T) {
 	}
 }
 
+func TestWebSocketTokenPrefersSubprotocolToken(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "http://localhost/ws/documents/doc-1?token=query-token", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	req.Header.Set("Sec-WebSocket-Protocol", "bearer, header-token")
+
+	if got := websocketToken(req); got != "header-token" {
+		t.Fatalf("expected header token, got %q", got)
+	}
+}
+
 func TestBroadcastRawSendsErrorBeforeClosingSlowClient(t *testing.T) {
 	hub := NewHub("test-instance")
 	client := &Client{docID: "doc-1", send: make(chan []byte, 1)}

@@ -3,6 +3,8 @@ package internal
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 )
 
 type Config struct {
@@ -15,7 +17,10 @@ type Config struct {
 	RedisHost      string
 	RedisPort      string
 	RedisPassword  string
+	RedisTLS       bool
 	JWTSecret      string
+	JWTTTL         time.Duration
+	BcryptCost     int
 	AllowedOrigins string
 	InstanceID     string
 }
@@ -31,7 +36,10 @@ func LoadConfig() Config {
 		RedisHost:      env("REDIS_HOST", "127.0.0.1"),
 		RedisPort:      env("REDIS_PORT", "6379"),
 		RedisPassword:  env("REDIS_PASSWORD", ""),
+		RedisTLS:       envBool("REDIS_TLS", false),
 		JWTSecret:      env("JWT_SECRET", ""),
+		JWTTTL:         envDuration("JWT_TTL", 2*time.Hour),
+		BcryptCost:     envInt("BCRYPT_COST", 12),
 		AllowedOrigins: env("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
 		InstanceID:     NewID(),
 	}
@@ -48,6 +56,36 @@ func (c Config) RedisAddr() string {
 func env(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func envBool(key string, fallback bool) bool {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			return parsed
+		}
 	}
 	return fallback
 }

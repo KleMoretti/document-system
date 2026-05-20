@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"log"
 
@@ -21,13 +22,17 @@ type RedisBus struct {
 }
 
 func NewRedisBus(cfg Config, hub *Hub) *RedisBus {
+	options := &redis.Options{
+		Addr:     cfg.RedisAddr(),
+		Password: cfg.RedisPassword,
+	}
+	if cfg.RedisTLS {
+		options.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
 	return &RedisBus{
-		cfg: cfg,
-		hub: hub,
-		client: redis.NewClient(&redis.Options{
-			Addr:     cfg.RedisAddr(),
-			Password: cfg.RedisPassword,
-		}),
+		cfg:    cfg,
+		hub:    hub,
+		client: redis.NewClient(options),
 	}
 }
 
@@ -48,7 +53,11 @@ func (b *RedisBus) Run(ctx context.Context) {
 }
 
 func (b *RedisBus) Publish(ctx context.Context, docID string, body []byte) {
-	envelope, _ := json.Marshal(RedisEnvelope{Source: b.cfg.InstanceID, DocID: docID, Body: body})
+	envelope, err := json.Marshal(RedisEnvelope{Source: b.cfg.InstanceID, DocID: docID, Body: body})
+	if err != nil {
+		log.Printf("redis envelope marshal failed: %v", err)
+		return
+	}
 	if err := b.client.Publish(ctx, "doc:"+docID, envelope).Err(); err != nil {
 		log.Printf("redis publish failed: %v", err)
 	}

@@ -1,0 +1,117 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: documentation-collab-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-documentation_collab}
+    ports:
+      - "${MYSQL_HOST_PORT:-3307}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./packages/shared-contract/sql/schema.mysql.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8
+    container_name: documentation-collab-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_HOST_PORT:-6380}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend-java:
+    build:
+      context: .
+      dockerfile: apps/backend-java/Dockerfile
+    container_name: documentation-collab-backend-java
+    environment:
+      JAVA_HTTP_PORT: 8080
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-documentation_collab}
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_TLS: ${REDIS_TLS:-false}
+      JWT_SECRET: ${JWT_SECRET:-local-documentation-secret-please-change}
+      JWT_TTL: ${JWT_TTL:-2h}
+      BCRYPT_COST: ${BCRYPT_COST:-12}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${JAVA_HOST_PORT:-18080}:8080"
+
+  backend-go:
+    profiles: ["go"]
+    build:
+      context: .
+      dockerfile: apps/backend-go/Dockerfile
+    container_name: documentation-collab-backend-go
+    environment:
+      GO_HTTP_ADDR: ":8081"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-documentation_collab}
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_TLS: ${REDIS_TLS:-false}
+      JWT_SECRET: ${JWT_SECRET:-local-documentation-secret-please-change}
+      JWT_TTL: ${JWT_TTL:-2h}
+      BCRYPT_COST: ${BCRYPT_COST:-12}
+      ALLOWED_ORIGINS: ${GO_ALLOWED_ORIGINS:-http://localhost:15174,http://127.0.0.1:15174}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${GO_HOST_PORT:-18081}:8081"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${WEB_API_BASE_URL:-http://localhost:18080}
+        VITE_WS_BASE_URL: ${WEB_WS_BASE_URL:-ws://localhost:18080}
+    container_name: documentation-collab-web
+    depends_on:
+      - backend-java
+    ports:
+      - "${WEB_PORT:-15173}:80"
+
+  web-go:
+    profiles: ["go"]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${WEB_GO_API_BASE_URL:-http://localhost:18081}
+        VITE_WS_BASE_URL: ${WEB_GO_WS_BASE_URL:-ws://localhost:18081}
+    container_name: documentation-collab-web-go
+    depends_on:
+      - backend-go
+    ports:
+      - "${WEB_GO_PORT:-15174}:80"
+
+volumes:
+  mysql-data:
+  redis-data:

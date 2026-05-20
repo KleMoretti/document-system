@@ -1,0 +1,13 @@
+.git
+.playwright-mcp
+node_modules
+apps/*/node_modules
+apps/*/dist
+apps/*/target
+apps/backend-go/*.log
+apps/web/*.log
+apps/web/*.tsbuildinfo
+coverage
+*.log
+Dockerfile
+docker-compose.override.yml

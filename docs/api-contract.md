@@ -23,6 +23,9 @@ Document formats:
 
 - The backend remains format-agnostic and persists the canonical collaborative Yjs state.
 - Markdown, HTML, and TXT import/export are frontend boundary conversions.
+- File import is a frontend preview-and-confirm flow. The backend document is created only after the user confirms the sanitized preview.
+- Document templates are frontend-provided HTML seeds that enter the same initial import path as uploaded files.
+- HTML and PDF exports may apply frontend-only style templates; Markdown and TXT exports remain content-only.
 - PDF export is a frontend browser print flow; PDF import is intentionally out of scope.
 - Imported files always create a new document and never overwrite an existing collaborative document.
 

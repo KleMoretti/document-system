@@ -6,7 +6,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -285,7 +287,7 @@ public class AppRepository {
   }
 
   public List<CommentThread> listComments(String docId) {
-    return jdbc.query(
+    var comments = jdbc.query(
         """
         SELECT c.id, c.document_id, c.author_id, u.display_name, c.body, c.resolved, c.created_at, c.updated_at
         FROM document_comments c
@@ -293,8 +295,23 @@ public class AppRepository {
         WHERE c.document_id = ?
         ORDER BY c.created_at DESC
         """,
-        (rs, row) -> comment(rs, listReplies(rs.getString("id"))),
+        (rs, row) -> comment(rs, List.of()),
         docId);
+    var replies = listRepliesForComments(comments.stream().map(CommentThread::id).toList());
+    return comments.stream()
+        .map(
+            comment ->
+                new CommentThread(
+                    comment.id(),
+                    comment.documentId(),
+                    comment.authorId(),
+                    comment.authorName(),
+                    comment.body(),
+                    comment.resolved(),
+                    comment.createdAt(),
+                    comment.updatedAt(),
+                    replies.getOrDefault(comment.id(), List.of())))
+        .toList();
   }
 
   public CommentThread createComment(String docId, String userId, String body) {
@@ -391,6 +408,39 @@ public class AppRepository {
                 rs.getString("body"),
                 rs.getTimestamp("created_at").toInstant()),
         commentId);
+  }
+
+  private Map<String, List<CommentReply>> listRepliesForComments(List<String> commentIds) {
+    var result = new HashMap<String, List<CommentReply>>();
+    if (commentIds.isEmpty()) {
+      return result;
+    }
+    var placeholders = String.join(",", java.util.Collections.nCopies(commentIds.size(), "?"));
+    jdbc.query(
+        """
+        SELECT r.id, r.comment_id, r.author_id, u.display_name, r.body, r.created_at
+        FROM document_comment_replies r
+        JOIN users u ON u.id = r.author_id
+        WHERE r.comment_id IN (
+        """
+            + placeholders
+            + """
+        )
+        ORDER BY r.comment_id ASC, r.created_at ASC
+        """,
+        rs -> {
+          var reply =
+              new CommentReply(
+                  rs.getString("id"),
+                  rs.getString("comment_id"),
+                  rs.getString("author_id"),
+                  rs.getString("display_name"),
+                  rs.getString("body"),
+                  rs.getTimestamp("created_at").toInstant());
+          result.computeIfAbsent(reply.commentId(), ignored -> new ArrayList<>()).add(reply);
+        },
+        commentIds.toArray());
+    return result;
   }
 
   private CommentThread comment(ResultSet rs, List<CommentReply> replies) throws SQLException {

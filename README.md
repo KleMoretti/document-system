@@ -47,6 +47,43 @@ Set-Location D:\Redis
 docker compose -f infra/docker-compose.yml up redis
 ```
 
+## Docker 一键启动
+
+默认 Compose 启动 Web、Java 后端、MySQL 和 Redis：
+
+```powershell
+docker compose up --build
+```
+
+启动后访问：
+
+- Web: `http://localhost:15173`
+- Java API: `http://localhost:18080`
+- MySQL: `127.0.0.1:3307`
+- Redis: `127.0.0.1:6380`
+
+Compose 默认把 Web、Java API、MySQL、Redis 映射到 `15173/18080/3307/6380`，避免和本机 `5173/8080/3306/6379` 服务冲突。容器网络内部仍使用 `web:80`、`backend-java:8080`、`mysql:3306` 和 `redis:6379`。
+
+如果要用 Go 后端验证同一套契约，启动 Go profile：
+
+```powershell
+docker compose --profile go up --build backend-go web-go mysql redis
+```
+
+启动后访问：
+
+- Web-Go: `http://localhost:15174`
+- Go API: `http://localhost:18081`
+
+常用清理命令：
+
+```powershell
+docker compose down
+docker compose down -v
+```
+
+`docker compose down -v` 会删除 MySQL / Redis 数据卷。需要修改端口、数据库密码、JWT secret 或前端连接地址时，复制 `.env.example` 为 `.env` 后调整其中的 Docker Compose 变量。
+
 ## MySQL
 
 本机 root 密码按当前环境使用 `123456`。
@@ -119,6 +156,31 @@ npm run build:web
 go test ./...
 D:\apache-maven-3.8.9\bin\mvn.cmd test
 ```
+
+## 可观测性与压测
+
+Java 和 Go 后端都提供 Prometheus 文本格式指标：
+
+```powershell
+Invoke-WebRequest http://localhost:18080/metrics -UseBasicParsing
+Invoke-WebRequest http://localhost:18081/metrics -UseBasicParsing
+```
+
+WebSocket 压测工具：
+
+```powershell
+npm run loadtest:ws -- -url ws://localhost:18080/ws/documents -doc-id <uuid> -token <jwt> -clients 100 -duration 30s -interval 1s -mode presence
+```
+
+更多说明见 `docs/operability.md`。
+
+安全相关默认值：
+
+- `JWT_TTL=2h`
+- `BCRYPT_COST=12`
+- WebSocket JWT 通过子协议传递，新客户端不再把 token 放入 URL 查询参数。
+
+更多安全说明见 `docs/security-notes.md`。
 
 ## 端口
 

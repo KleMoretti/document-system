@@ -6,7 +6,8 @@ import Placeholder from '@tiptap/extension-placeholder';
 import * as Y from 'yjs';
 import { WS_BASE } from './config';
 import { htmlToMarkdown, htmlToText, shouldApplyInitialImport } from './documentFormats';
-import type { ExportFormat, PendingImport } from './types';
+import { buildStyledHtmlDocument, exportStyles } from './exportStyles';
+import type { ExportFormat, ExportStyleId, PendingImport } from './types';
 
 type SocketMessage = {
   type: string;
@@ -22,6 +23,7 @@ type SocketMessage = {
 
 type Props = {
   docId: string;
+  documentTitle: string;
   token: string;
   readOnly: boolean;
   displayName: string;
@@ -31,6 +33,7 @@ type Props = {
 
 export function CollaborativeEditor({
   docId,
+  documentTitle,
   token,
   readOnly,
   displayName,
@@ -40,6 +43,7 @@ export function CollaborativeEditor({
   const ydoc = useMemo(() => new Y.Doc(), [docId]);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'offline'>('connecting');
   const [online, setOnline] = useState<Record<string, number>>({});
+  const [exportStyleId, setExportStyleId] = useState<ExportStyleId>('clean');
 
   const editor = useEditor(
     {
@@ -78,15 +82,19 @@ export function CollaborativeEditor({
         return;
       }
       setStatus('offline');
-      const delay = Math.min(1000 * 2 ** attempts, 10000);
-      attempts += 1;
+      const reconnect = nextReconnectDelay(attempts);
+      if (!reconnect.shouldReconnect) {
+        return;
+      }
+      attempts = reconnect.nextAttempts;
+      const delay = reconnect.delay;
       reconnectTimer = window.setTimeout(connect, delay);
     };
 
     function connect() {
       reconnectTimer = null;
       setStatus('connecting');
-      socket = new WebSocket(`${WS_BASE}/ws/documents/${docId}?token=${encodeURIComponent(token)}`);
+      socket = new WebSocket(`${WS_BASE}/ws/documents/${docId}`, ['bearer', token]);
 
       socket.addEventListener('open', () => {
         attempts = 0;
@@ -164,11 +172,15 @@ export function CollaborativeEditor({
     }
     const html = editor.getHTML();
     if (format === 'pdf') {
-      printHtml(html);
+      printHtml(buildStyledHtmlDocument(html, { title: documentTitle, styleId: exportStyleId }));
       return;
     }
     const content =
-      format === 'html' ? html : format === 'markdown' ? htmlToMarkdown(html) : htmlToText(html);
+      format === 'html'
+        ? buildStyledHtmlDocument(html, { title: documentTitle, styleId: exportStyleId })
+        : format === 'markdown'
+          ? htmlToMarkdown(html)
+          : htmlToText(html);
     const extension = format === 'markdown' ? 'md' : format === 'text' ? 'txt' : 'html';
     const type =
       format === 'html'
@@ -192,6 +204,16 @@ export function CollaborativeEditor({
         <span>{status === 'connected' ? '已连接' : status === 'connecting' ? '连接中' : '离线'}</span>
         {readOnly && <span className="readonly-badge">只读</span>}
         <span className="presence">{onlineNames.length > 0 ? `在线：${onlineNames.join('、')}` : '等待协作者'}</span>
+        <label className="export-style-picker">
+          导出样式
+          <select value={exportStyleId} onChange={(event) => setExportStyleId(event.target.value as ExportStyleId)}>
+            {exportStyles.map((style) => (
+              <option value={style.id} key={style.id}>
+                {style.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <button type="button" onClick={() => exportFile('html')}>导出 HTML</button>
         <button type="button" onClick={() => exportFile('markdown')}>导出 Markdown</button>
         <button type="button" onClick={() => exportFile('text')}>导出 TXT</button>
@@ -206,25 +228,21 @@ export function shouldReconnectAfterSocketError(code?: string): boolean {
   return code !== 'UNAUTHORIZED' && code !== 'FORBIDDEN' && code !== 'INVALID_DOCUMENT_ID';
 }
 
-function printHtml(html: string) {
+export function nextReconnectDelay(attempts: number): { delay: number; nextAttempts: number; shouldReconnect: boolean } {
+  const maxAttempts = 12;
+  if (attempts >= maxAttempts) {
+    return { delay: 0, nextAttempts: attempts, shouldReconnect: false };
+  }
+  return { delay: Math.min(1000 * 2 ** attempts, 10000), nextAttempts: attempts + 1, shouldReconnect: true };
+}
+
+function printHtml(htmlDocument: string) {
   const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700');
   if (!printWindow) {
     window.print();
     return;
   }
-  printWindow.document.write(`
-    <!doctype html>
-    <html>
-      <head>
-        <title>Export PDF</title>
-        <style>
-          body { color: #172033; font-family: Georgia, 'Times New Roman', serif; line-height: 1.7; padding: 32px; }
-          h1, h2, h3 { line-height: 1.25; }
-        </style>
-      </head>
-      <body>${html}</body>
-    </html>
-  `);
+  printWindow.document.write(htmlDocument);
   printWindow.document.close();
   printWindow.focus();
   printWindow.print();

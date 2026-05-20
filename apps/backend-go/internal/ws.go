@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -91,7 +92,7 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid document id", http.StatusBadRequest)
 		return
 	}
-	token := r.URL.Query().Get("token")
+	token := websocketToken(r)
 	claims, err := s.auth.Verify(token)
 	if err != nil {
 		http.Error(w, "invalid token", http.StatusUnauthorized)
@@ -104,6 +105,7 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	upgrader := websocket.Upgrader{
+		Subprotocols: []string{"bearer"},
 		CheckOrigin: func(r *http.Request) bool {
 			return originAllowed(r, s.cfg.AllowedOrigins)
 		},
@@ -120,7 +122,11 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	}
 	client := &Client{docID: docID, userID: claims.UserID, conn: conn, send: make(chan []byte, 32)}
 	s.hub.Register(client)
-	defer s.hub.Unregister(client)
+	s.metrics.ObserveWebSocketConnect()
+	defer func() {
+		s.hub.Unregister(client)
+		s.metrics.ObserveWebSocketDisconnect()
+	}()
 
 	encoded := make([]string, 0, len(updates))
 	for _, update := range updates {
@@ -149,6 +155,7 @@ func readPump(ctx context.Context, s *Server, client *Client, role string) {
 		}
 		msg.DocID = client.docID
 		msg.UserID = client.userID
+		s.metrics.ObserveWebSocketMessage(msg.Type)
 
 		switch msg.Type {
 		case "sync:update":
@@ -179,7 +186,11 @@ func readPump(ctx context.Context, s *Server, client *Client, role string) {
 }
 
 func broadcast(s *Server, msg WSMessage) {
-	payload, _ := json.Marshal(msg)
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("websocket broadcast marshal failed: %v", err)
+		return
+	}
 	s.hub.BroadcastRaw(msg.DocID, payload)
 	s.bus.Publish(context.Background(), msg.DocID, payload)
 }
@@ -234,4 +245,16 @@ func originAllowed(r *http.Request, allowedOrigins string) bool {
 		}
 	}
 	return false
+}
+
+func websocketToken(r *http.Request) string {
+	protocols := strings.Split(r.Header.Get("Sec-WebSocket-Protocol"), ",")
+	for index, protocol := range protocols {
+		if strings.TrimSpace(protocol) == "bearer" && index+1 < len(protocols) {
+			if token := strings.TrimSpace(protocols[index+1]); token != "" {
+				return token
+			}
+		}
+	}
+	return r.URL.Query().Get("token")
 }

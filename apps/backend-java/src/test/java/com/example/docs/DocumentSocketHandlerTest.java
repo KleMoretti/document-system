@@ -7,8 +7,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.nio.charset.StandardCharsets;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.HashMap;
@@ -25,7 +25,8 @@ class DocumentSocketHandlerTest {
         new DocumentSocketHandler(
             mock(AppRepository.class),
             new JwtManager("test-secret", Duration.ofHours(1)),
-            redisBus);
+            redisBus,
+            new MetricsRegistry());
     var session = mock(WebSocketSession.class);
     when(session.getUri()).thenReturn(new URI("ws://localhost:8080/ws/documents/doc-1?token=bad"));
     when(session.isOpen()).thenReturn(true);
@@ -45,7 +46,8 @@ class DocumentSocketHandlerTest {
         new DocumentSocketHandler(
             mock(AppRepository.class),
             new JwtManager("test-secret", Duration.ofHours(1)),
-            redisBus);
+            redisBus,
+            new MetricsRegistry());
     var session = mock(WebSocketSession.class);
     when(session.getUri()).thenReturn(new URI("ws://localhost:8080/ws/documents/not-a-uuid?token=" + token));
     when(session.isOpen()).thenReturn(true);
@@ -64,7 +66,8 @@ class DocumentSocketHandlerTest {
         new DocumentSocketHandler(
             repository,
             new JwtManager("test-secret", Duration.ofHours(1)),
-            mock(RedisBus.class));
+            mock(RedisBus.class),
+            new MetricsRegistry());
     var session = mock(WebSocketSession.class);
     var attributes = new HashMap<String, Object>();
     attributes.put("docId", "11111111-1111-4111-8111-111111111111");

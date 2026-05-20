@@ -12,7 +12,10 @@ spring:
 
 app:
   jwt-secret: ${JWT_SECRET:}
+  jwt-ttl: ${JWT_TTL:2h}
+  bcrypt-cost: ${BCRYPT_COST:12}
   redis-host: ${REDIS_HOST:127.0.0.1}
   redis-port: ${REDIS_PORT:6379}
   redis-password: ${REDIS_PASSWORD:}
+  redis-tls: ${REDIS_TLS:false}
   allowed-origins: ${ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}

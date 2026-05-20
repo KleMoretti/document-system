@@ -8,6 +8,16 @@ servers:
   - url: http://localhost:8081
     description: Go backend
 paths:
+  /metrics:
+    get:
+      summary: Return Prometheus-compatible runtime metrics
+      responses:
+        "200":
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
   /api/auth/register:
     post:
       summary: Register a user
