@@ -158,6 +158,10 @@ func (s *Store) RestoreDocument(ctx context.Context, docID string) error {
 	return err
 }
 
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
+
 func (s *Store) GetRole(ctx context.Context, userID, docID string) (string, error) {
 	row := s.db.QueryRowContext(ctx, "SELECT role FROM document_permissions WHERE document_id = ? AND user_id = ?", docID, userID)
 	var role string
@@ -222,7 +226,12 @@ func (s *Store) AppendUpdate(ctx context.Context, docID string, update []byte) e
 	}
 
 	var nextSeq int64
-	row := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(seq), 0) + 1 FROM document_updates WHERE document_id = ? FOR UPDATE", docID)
+	row := tx.QueryRowContext(ctx, `
+		SELECT GREATEST(
+		  COALESCE((SELECT MAX(seq) FROM document_updates WHERE document_id = ?), 0),
+		  COALESCE((SELECT MAX(last_seq) FROM document_snapshots WHERE document_id = ?), 0)
+		) + 1
+		FOR UPDATE`, docID, docID)
 	if err := row.Scan(&nextSeq); err != nil {
 		return err
 	}
@@ -254,6 +263,56 @@ func (s *Store) LoadUpdates(ctx context.Context, docID string) ([][]byte, error)
 	return updates, rows.Err()
 }
 
+func (s *Store) LoadDocumentState(ctx context.Context, docID string) (DocumentState, error) {
+	state := DocumentState{}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT snapshot_data, last_seq
+		FROM document_snapshots
+		WHERE document_id = ?
+		ORDER BY last_seq DESC
+		LIMIT 1`, docID)
+	if err := row.Scan(&state.Snapshot, &state.SnapshotSeq); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return state, err
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT update_data FROM document_updates WHERE document_id = ? AND seq > ? ORDER BY seq ASC", docID, state.SnapshotSeq)
+	if err != nil {
+		return state, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var update []byte
+		if err := rows.Scan(&update); err != nil {
+			return state, err
+		}
+		state.Updates = append(state.Updates, update)
+	}
+	return state, rows.Err()
+}
+
+func (s *Store) SaveSnapshot(ctx context.Context, docID string, lastSeq int64, snapshot []byte) error {
+	if lastSeq <= 0 {
+		return errors.New("snapshot sequence must be positive")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockDocument(ctx, tx, docID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO document_snapshots (document_id, last_seq, snapshot_data)
+		VALUES (?, ?, ?)
+		ON DUPLICATE KEY UPDATE snapshot_data = VALUES(snapshot_data), created_at = CURRENT_TIMESTAMP`, docID, lastSeq, snapshot); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM document_updates WHERE document_id = ? AND seq <= ?", docID, lastSeq); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) ListVersions(ctx context.Context, docID string) ([]DocumentVersionSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, document_id, label, created_by, created_at
@@ -279,9 +338,13 @@ func (s *Store) CreateVersion(ctx context.Context, docID, userID, label string) 
 	if strings.TrimSpace(label) == "" {
 		label = "Manual version"
 	}
-	updates, err := s.LoadUpdates(ctx, docID)
+	state, err := s.LoadDocumentState(ctx, docID)
 	if err != nil {
 		return DocumentVersionSummary{}, err
+	}
+	updates := state.Updates
+	if len(state.Snapshot) > 0 {
+		updates = append([][]byte{state.Snapshot}, updates...)
 	}
 	encoded := make([]string, 0, len(updates))
 	for _, update := range updates {
@@ -341,6 +404,9 @@ func (s *Store) RestoreVersion(ctx context.Context, docID, versionID string) err
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM document_updates WHERE document_id = ?", docID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM document_snapshots WHERE document_id = ?", docID); err != nil {
 		return err
 	}
 	for index, update := range version.Updates {

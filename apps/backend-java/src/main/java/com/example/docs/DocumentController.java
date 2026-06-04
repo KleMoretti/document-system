@@ -154,6 +154,7 @@ public class DocumentController {
       throw new ForbiddenException("You cannot restore a version for this document.");
     }
     repository.restoreVersion(docId, versionId);
+    socketHandler.broadcastDocumentRestored(docId);
   }
 
   @GetMapping("/{docId}/comments")

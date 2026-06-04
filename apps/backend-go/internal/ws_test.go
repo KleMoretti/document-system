@@ -75,3 +75,28 @@ func TestUpdateSizeRejectsOversizedUpdate(t *testing.T) {
 		t.Fatal("expected oversized update to be rejected")
 	}
 }
+
+func TestSyncInitMessageIncludesSnapshotBeforeUpdates(t *testing.T) {
+	payload, err := json.Marshal(WSMessage{
+		Type:        "sync:init",
+		DocID:       "doc-1",
+		Snapshot:    "snapshot-state",
+		SnapshotSeq: 12,
+		Updates:     []string{"update-13"},
+	})
+	if err != nil {
+		t.Fatalf("marshal sync init: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode sync init: %v", err)
+	}
+
+	if decoded["snapshot"] != "snapshot-state" {
+		t.Fatalf("expected snapshot in payload, got %v", decoded["snapshot"])
+	}
+	if decoded["snapshotSeq"] != float64(12) {
+		t.Fatalf("expected snapshotSeq 12, got %v", decoded["snapshotSeq"])
+	}
+}

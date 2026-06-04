@@ -22,6 +22,8 @@ type WSMessage struct {
 	Color       string         `json:"color,omitempty"`
 	Update      string         `json:"update,omitempty"`
 	Updates     []string       `json:"updates,omitempty"`
+	Snapshot    string         `json:"snapshot,omitempty"`
+	SnapshotSeq int64          `json:"snapshotSeq,omitempty"`
 	CommentID   string         `json:"commentId,omitempty"`
 	Comment     *CommentThread `json:"comment,omitempty"`
 	Code        string         `json:"code,omitempty"`
@@ -114,7 +116,7 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	updates, err := s.store.LoadUpdates(r.Context(), docID)
+	state, err := s.store.LoadDocumentState(r.Context(), docID)
 	if err != nil {
 		_ = conn.WriteJSON(WSMessage{Type: "error", DocID: docID, Code: "SYNC_INIT_FAILED", Message: "Could not load document state."})
 		_ = conn.Close()
@@ -128,11 +130,15 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 		s.metrics.ObserveWebSocketDisconnect()
 	}()
 
-	encoded := make([]string, 0, len(updates))
-	for _, update := range updates {
+	encoded := make([]string, 0, len(state.Updates))
+	for _, update := range state.Updates {
 		encoded = append(encoded, base64.StdEncoding.EncodeToString(update))
 	}
-	_ = conn.WriteJSON(WSMessage{Type: "sync:init", DocID: docID, Updates: encoded})
+	initMessage := WSMessage{Type: "sync:init", DocID: docID, Updates: encoded, SnapshotSeq: state.SnapshotSeq}
+	if len(state.Snapshot) > 0 {
+		initMessage.Snapshot = base64.StdEncoding.EncodeToString(state.Snapshot)
+	}
+	_ = conn.WriteJSON(initMessage)
 
 	go writePump(client)
 	readPump(r.Context(), s, client, role)
@@ -179,6 +185,24 @@ func readPump(ctx context.Context, s *Server, client *Client, role string) {
 			broadcast(s, msg)
 		case "presence:update":
 			broadcast(s, msg)
+		case "sync:snapshot":
+			if !CanEdit(role) {
+				sendError(client, "FORBIDDEN", "You cannot compact this document.")
+				continue
+			}
+			snapshot, err := base64.StdEncoding.DecodeString(msg.Snapshot)
+			if err != nil {
+				sendError(client, "INVALID_SNAPSHOT", "Snapshot must be base64 encoded.")
+				continue
+			}
+			if !updateAllowed(snapshot) {
+				sendError(client, "SNAPSHOT_TOO_LARGE", "Snapshot is too large.")
+				continue
+			}
+			if err := s.store.SaveSnapshot(ctx, client.docID, msg.SnapshotSeq, snapshot); err != nil {
+				sendError(client, "DATABASE_ERROR", "Could not persist snapshot.")
+				continue
+			}
 		default:
 			sendError(client, "UNKNOWN_MESSAGE", "Unknown websocket message type.")
 		}

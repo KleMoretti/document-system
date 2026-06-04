@@ -37,6 +37,8 @@ record DocumentVersionSummary(
 record DocumentVersion(
     String id, String documentId, String label, String createdBy, Instant createdAt, java.util.List<String> updates) {}
 
+record DocumentState(byte[] snapshot, long snapshotSeq, java.util.List<byte[]> updates) {}
+
 record CreateCommentRequest(String body) {}
 
 record CreateReplyRequest(String body) {}
@@ -67,6 +69,8 @@ record WsMessage(
     String color,
     String update,
     java.util.List<String> updates,
+    String snapshot,
+    Long snapshotSeq,
     String code,
     String message) {}
 

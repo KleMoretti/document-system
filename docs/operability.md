@@ -21,6 +21,17 @@ Both backends expose Prometheus-compatible metrics at:
 GET /metrics
 ```
 
+## Health Checks
+
+Both backends expose:
+
+```text
+GET /healthz
+GET /readyz
+```
+
+`/healthz` verifies process liveness. `/readyz` verifies required dependencies, currently MySQL, and returns HTTP 503 when the service should not receive traffic.
+
 Metrics currently emitted:
 
 - `documentation_collab_http_requests_total{method,path,status}`

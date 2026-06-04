@@ -16,6 +16,8 @@ flowchart LR
 
 Yjs is the source of truth for collaborative rich-text state. Backends authenticate users, authorize documents, persist Yjs updates in MySQL, and fan out updates through Redis.
 
+To keep long-lived documents from replaying an unbounded update sequence, both backends support Yjs state snapshots. A snapshot stores a compact state update plus the highest persisted sequence it covers; `sync:init` sends the latest snapshot first and then only later incremental updates.
+
 Productized collaboration features build on the same contract:
 
 - Document lists support title search and active/deleted filtering.

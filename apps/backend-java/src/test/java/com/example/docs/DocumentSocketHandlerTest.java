@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.eq;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -85,5 +86,31 @@ class DocumentSocketHandlerTest {
 
     verify(repository, never()).appendUpdate(any(), any());
     verify(session).sendMessage(any(TextMessage.class));
+  }
+
+  @Test
+  void snapshotMessagePersistsSnapshotForEditors() throws Exception {
+    var repository = mock(AppRepository.class);
+    var handler =
+        new DocumentSocketHandler(
+            repository,
+            new JwtManager("test-secret", Duration.ofHours(1)),
+            mock(RedisBus.class),
+            new MetricsRegistry());
+    var session = mock(WebSocketSession.class);
+    var attributes = new HashMap<String, Object>();
+    attributes.put("docId", "11111111-1111-4111-8111-111111111111");
+    attributes.put("userId", "user-1");
+    attributes.put("role", "editor");
+    when(session.getAttributes()).thenReturn(attributes);
+    var snapshot = Base64.getEncoder().encodeToString("state".getBytes(StandardCharsets.UTF_8));
+
+    handler.handleTextMessage(
+        session,
+        new TextMessage(
+            ("{\"type\":\"sync:snapshot\",\"snapshot\":\"" + snapshot + "\",\"snapshotSeq\":7}")
+                .getBytes(StandardCharsets.UTF_8)));
+
+    verify(repository).saveSnapshot(eq("11111111-1111-4111-8111-111111111111"), eq(7L), any());
   }
 }

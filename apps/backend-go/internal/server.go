@@ -28,6 +28,8 @@ func NewServer(cfg Config, store *Store, auth *JWTManager, hub *Hub, bus *RedisB
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", s.healthz)
+	mux.HandleFunc("/readyz", s.readyz)
 	mux.HandleFunc("/metrics", s.metricsEndpoint)
 	mux.Handle("/api/auth/register", s.metrics.Middleware(http.HandlerFunc(s.withCORS(s.register))))
 	mux.Handle("/api/auth/login", s.metrics.Middleware(http.HandlerFunc(s.withCORS(s.login))))
@@ -36,6 +38,26 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/api/documents/", s.metrics.Middleware(http.HandlerFunc(s.withCORS(s.requireAuth(s.documentByID)))))
 	mux.HandleFunc("/ws/documents/", s.websocket)
 	return mux
+}
+
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed.")
+		return
+	}
+	if s.store == nil || s.store.Ping(r.Context()) != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) metricsEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +343,7 @@ func (s *Server) handleVersions(w http.ResponseWriter, r *http.Request, doc Docu
 			writeError(w, http.StatusInternalServerError, "DATABASE_ERROR", "Could not restore version.")
 			return
 		}
+		broadcast(s, WSMessage{Type: "document:restored", DocID: doc.ID})
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

@@ -49,9 +49,24 @@ Java 和 Go 后端都暴露 `GET /metrics`，用于抓取 Prometheus text exposi
 {
   "type": "sync:init",
   "docId": "uuid",
+  "snapshot": "base64-yjs-state-update",
+  "snapshotSeq": 120,
   "updates": ["base64-yjs-update"]
 }
 ```
+
+`snapshot` 和 `snapshotSeq` 可选。客户端收到后必须先应用 `snapshot`，再按顺序应用 `updates`。未压缩的旧文档可以继续只返回 `updates`。
+
+```json
+{
+  "type": "sync:snapshot",
+  "docId": "uuid",
+  "snapshot": "base64-yjs-state-update",
+  "snapshotSeq": 120
+}
+```
+
+`sync:snapshot` 由有编辑权限的客户端发送，用于压缩历史 Yjs update 序列。服务端仍保留 `snapshotSeq` 之后的增量 update，保证旧增量写入不丢失。
 
 ```json
 {
@@ -79,6 +94,15 @@ Java 和 Go 后端都暴露 `GET /metrics`，用于抓取 Prometheus text exposi
   "message": "You do not have access to this document."
 }
 ```
+
+```json
+{
+  "type": "document:restored",
+  "docId": "uuid"
+}
+```
+
+`document:restored` 表示服务端已用历史版本替换当前持久化状态。客户端应重新加载文档，避免继续基于旧本地状态写入。
 
 ## Comment Events
 

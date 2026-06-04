@@ -15,6 +15,8 @@ type SocketMessage = {
   userId?: string;
   update?: string;
   updates?: string[];
+  snapshot?: string;
+  snapshotSeq?: number;
   displayName?: string;
   color?: string;
   code?: string;
@@ -114,8 +116,25 @@ export function CollaborativeEditor({
       socket.addEventListener('message', (event) => {
         const msg = JSON.parse(event.data as string) as SocketMessage;
         if (msg.type === 'sync:init') {
-          msg.updates?.forEach((update) => Y.applyUpdate(ydoc, base64ToBytes(update), 'remote'));
-          if (shouldApplyInitialImport(initialImport, docId, msg.updates)) {
+          applySyncInitUpdates(ydoc, msg);
+          if (
+            socket?.readyState === WebSocket.OPEN &&
+            shouldSubmitSnapshot({
+              readOnly,
+              updatesCount: msg.updates?.length ?? 0,
+              snapshotSeq: msg.snapshotSeq ?? 0
+            })
+          ) {
+            socket.send(
+              JSON.stringify({
+                type: 'sync:snapshot',
+                snapshot: bytesToBase64(Y.encodeStateAsUpdate(ydoc)),
+                snapshotSeq: (msg.snapshotSeq ?? 0) + (msg.updates?.length ?? 0)
+              })
+            );
+          }
+          const persistedUpdates = msg.snapshot ? ['snapshot', ...(msg.updates ?? [])] : msg.updates;
+          if (shouldApplyInitialImport(initialImport, docId, persistedUpdates)) {
             editor.commands.setContent(initialImport!.html);
             onInitialImportApplied?.(docId);
           }
@@ -125,6 +144,9 @@ export function CollaborativeEditor({
         }
         if (msg.type === 'presence:update' && msg.displayName) {
           setOnline((current) => ({ ...current, [msg.displayName!]: Date.now() }));
+        }
+        if (msg.type === 'document:restored') {
+          window.location.reload();
         }
         if (msg.type === 'error') {
           if (!shouldReconnectAfterSocketError(msg.code)) {
@@ -234,6 +256,24 @@ export function nextReconnectDelay(attempts: number): { delay: number; nextAttem
     return { delay: 0, nextAttempts: attempts, shouldReconnect: false };
   }
   return { delay: Math.min(1000 * 2 ** attempts, 10000), nextAttempts: attempts + 1, shouldReconnect: true };
+}
+
+export function applySyncInitUpdates(ydoc: Y.Doc, msg: Pick<SocketMessage, 'snapshot' | 'updates'>) {
+  if (msg.snapshot) {
+    Y.applyUpdate(ydoc, base64ToBytes(msg.snapshot), 'remote');
+  }
+  msg.updates?.forEach((update) => Y.applyUpdate(ydoc, base64ToBytes(update), 'remote'));
+}
+
+export function shouldSubmitSnapshot({
+  readOnly,
+  updatesCount
+}: {
+  readOnly: boolean;
+  updatesCount: number;
+  snapshotSeq: number;
+}): boolean {
+  return !readOnly && updatesCount >= 100;
 }
 
 function printHtml(htmlDocument: string) {

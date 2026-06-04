@@ -67,18 +67,21 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
     session.getAttributes().put("userId", claims.userId());
     session.getAttributes().put("role", role);
 
-    var updates = new ArrayList<String>();
+    DocumentState state;
     try {
-      for (byte[] update : repository.loadUpdates(docId)) {
-        updates.add(Base64.getEncoder().encodeToString(update));
-      }
+      state = repository.loadDocumentState(docId);
     } catch (RuntimeException ex) {
       reject(session, "SYNC_INIT_FAILED", "Could not load document state.");
       return;
     }
+    var updates = new ArrayList<String>();
+    for (byte[] update : state.updates()) {
+      updates.add(Base64.getEncoder().encodeToString(update));
+    }
     sessions.computeIfAbsent(docId, ignored -> ConcurrentHashMap.newKeySet()).add(session);
     metrics.observeWebSocketConnect();
-    session.sendMessage(new TextMessage(mapper.writeValueAsString(new WsMessage("sync:init", docId, null, null, null, null, updates, null, null))));
+    var snapshot = state.snapshot() == null || state.snapshot().length == 0 ? null : Base64.getEncoder().encodeToString(state.snapshot());
+    session.sendMessage(new TextMessage(mapper.writeValueAsString(new WsMessage("sync:init", docId, null, null, null, null, updates, snapshot, state.snapshotSeq(), null, null))));
   }
 
   @Override
@@ -120,6 +123,20 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
       return;
     }
 
+    if ("sync:snapshot".equals(type)) {
+      if (!Roles.canEdit(role)) {
+        sendError(session, "FORBIDDEN", "You cannot compact this document.");
+        return;
+      }
+      var snapshot = Base64.getDecoder().decode(node.path("snapshot").asText());
+      if (snapshot.length > MAX_UPDATE_BYTES) {
+        sendError(session, "SNAPSHOT_TOO_LARGE", "Snapshot is too large.");
+        return;
+      }
+      repository.saveSnapshot(docId, node.path("snapshotSeq").asLong(), snapshot);
+      return;
+    }
+
     sendError(session, "UNKNOWN_MESSAGE", "Unknown websocket message type.");
   }
 
@@ -152,6 +169,15 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
     }
   }
 
+  public void broadcastDocumentRestored(String docId) {
+    try {
+      var outgoing = mapper.createObjectNode().put("type", "document:restored").put("docId", docId);
+      broadcast(docId, outgoing);
+    } catch (Exception ex) {
+      log.warn("Document restored websocket event broadcast failed for document {}", docId, ex);
+    }
+  }
+
   private void broadcastRemote(String docId, JsonNode body) {
     try {
       broadcastLocal(docId, mapper.writeValueAsString(body));
@@ -170,7 +196,7 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
 
   private void sendError(WebSocketSession session, String code, String message) throws Exception {
     var docId = (String) session.getAttributes().get("docId");
-    session.sendMessage(new TextMessage(mapper.writeValueAsString(new WsMessage("error", docId, null, null, null, null, null, code, message))));
+    session.sendMessage(new TextMessage(mapper.writeValueAsString(new WsMessage("error", docId, null, null, null, null, null, null, null, code, message))));
   }
 
   private void reject(WebSocketSession session, String code, String message) throws Exception {
