@@ -6,6 +6,9 @@ spring:
     url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:documentation_collab}?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC
     username: ${MYSQL_USER:root}
     password: ${MYSQL_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${DB_MAX_OPEN_CONNS:50}
+      minimum-idle: ${DB_MAX_IDLE_CONNS:25}
   sql:
     init:
       mode: never
@@ -19,3 +22,7 @@ app:
   redis-password: ${REDIS_PASSWORD:}
   redis-tls: ${REDIS_TLS:false}
   allowed-origins: ${ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+  ws-send-queue-size: ${WS_SEND_QUEUE_SIZE:32}
+  ws-batch-max-size: ${WS_BATCH_MAX_SIZE:32}
+  ws-batch-flush-ms: ${WS_BATCH_FLUSH_MS:25}
+  ws-snapshot-min-updates: ${WS_SNAPSHOT_MIN_UPDATES:100}

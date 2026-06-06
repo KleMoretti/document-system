@@ -22,6 +22,13 @@ Java 和 Go 后端都暴露 `GET /metrics`，用于抓取 Prometheus text exposi
 - `documentation_collab_ws_connections_total`
 - `documentation_collab_ws_connections_active`
 - `documentation_collab_ws_messages_total`
+- `documentation_collab_ws_errors_total`
+- `documentation_collab_ws_message_bytes_total`
+- `documentation_collab_ws_slow_clients_total`
+- `documentation_collab_ws_send_queue_depth_max`
+- `documentation_collab_ws_broadcast_duration_ms_count|sum|max`
+- `documentation_collab_ws_persist_duration_ms_count|sum|max`
+- `documentation_collab_ws_batch_size_count|sum|max`
 
 ## Client -> Server
 

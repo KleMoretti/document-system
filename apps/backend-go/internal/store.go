@@ -216,6 +216,13 @@ func (s *Store) RemoveShare(ctx context.Context, docID, userID string) error {
 }
 
 func (s *Store) AppendUpdate(ctx context.Context, docID string, update []byte) error {
+	return s.AppendUpdates(ctx, docID, [][]byte{update})
+}
+
+func (s *Store) AppendUpdates(ctx context.Context, docID string, updates [][]byte) error {
+	if len(updates) == 0 {
+		return nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -224,22 +231,30 @@ func (s *Store) AppendUpdate(ctx context.Context, docID string, update []byte) e
 	if err := lockDocument(ctx, tx, docID); err != nil {
 		return err
 	}
-
-	var nextSeq int64
-	row := tx.QueryRowContext(ctx, `
-		SELECT GREATEST(
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO document_sequences (document_id, next_seq)
+		SELECT ?, GREATEST(
 		  COALESCE((SELECT MAX(seq) FROM document_updates WHERE document_id = ?), 0),
 		  COALESCE((SELECT MAX(last_seq) FROM document_snapshots WHERE document_id = ?), 0)
 		) + 1
-		FOR UPDATE`, docID, docID)
+		ON DUPLICATE KEY UPDATE next_seq = next_seq`, docID, docID, docID); err != nil {
+		return err
+	}
+
+	var nextSeq int64
+	row := tx.QueryRowContext(ctx, "SELECT next_seq FROM document_sequences WHERE document_id = ? FOR UPDATE", docID)
 	if err := row.Scan(&nextSeq); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO document_updates (document_id, seq, update_data) VALUES (?, ?, ?)", docID, nextSeq, update); err != nil {
+	for index, update := range updates {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO document_updates (document_id, seq, update_data) VALUES (?, ?, ?)", docID, nextSeq+int64(index), update); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE document_sequences SET next_seq = ? WHERE document_id = ?", nextSeq+int64(len(updates)), docID); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, "UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", docID)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ? AND updated_at < CURRENT_TIMESTAMP - INTERVAL 5 SECOND", docID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -419,6 +434,13 @@ func (s *Store) RestoreVersion(ctx context.Context, docID, versionID string) err
 			docID, index+1, decoded); err != nil {
 			return err
 		}
+	}
+	nextSeq := int64(len(version.Updates) + 1)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO document_sequences (document_id, next_seq)
+		VALUES (?, ?)
+		ON DUPLICATE KEY UPDATE next_seq = VALUES(next_seq)`, docID, nextSeq); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", docID); err != nil {
 		return err

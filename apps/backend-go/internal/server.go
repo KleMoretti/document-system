@@ -20,10 +20,24 @@ type Server struct {
 	hub     *Hub
 	bus     *RedisBus
 	metrics *Metrics
+	batcher *UpdateBatcher
 }
 
 func NewServer(cfg Config, store *Store, auth *JWTManager, hub *Hub, bus *RedisBus) *Server {
-	return &Server{cfg: cfg, store: store, auth: auth, hub: hub, bus: bus, metrics: NewMetrics()}
+	metrics := NewMetrics()
+	if hub != nil {
+		hub.metrics = metrics
+	}
+	var batcher *UpdateBatcher
+	if store != nil {
+		batcher = NewUpdateBatcher(UpdateBatcherConfig{
+			MaxSize:  cfg.WSBatchMaxSize,
+			FlushAge: cfg.WSBatchFlush,
+			Append:   store.AppendUpdates,
+			Metrics:  metrics,
+		})
+	}
+	return &Server{cfg: cfg, store: store, auth: auth, hub: hub, bus: bus, metrics: metrics, batcher: batcher}
 }
 
 func (s *Server) Routes() http.Handler {

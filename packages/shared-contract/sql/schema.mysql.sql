@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS document_permissions (
   CONSTRAINT fk_permissions_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE IF NOT EXISTS document_sequences (
+  document_id VARCHAR(36) PRIMARY KEY,
+  next_seq BIGINT NOT NULL DEFAULT 1,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_sequences_document FOREIGN KEY (document_id) REFERENCES documents(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE IF NOT EXISTS document_updates (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   document_id VARCHAR(36) NOT NULL,

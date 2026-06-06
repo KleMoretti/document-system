@@ -8,40 +8,52 @@ import (
 )
 
 type Config struct {
-	HTTPAddr       string
-	MySQLHost      string
-	MySQLPort      string
-	MySQLDatabase  string
-	MySQLUser      string
-	MySQLPassword  string
-	RedisHost      string
-	RedisPort      string
-	RedisPassword  string
-	RedisTLS       bool
-	JWTSecret      string
-	JWTTTL         time.Duration
-	BcryptCost     int
-	AllowedOrigins string
-	InstanceID     string
+	HTTPAddr             string
+	MySQLHost            string
+	MySQLPort            string
+	MySQLDatabase        string
+	MySQLUser            string
+	MySQLPassword        string
+	RedisHost            string
+	RedisPort            string
+	RedisPassword        string
+	RedisTLS             bool
+	JWTSecret            string
+	JWTTTL               time.Duration
+	BcryptCost           int
+	DBMaxOpenConns       int
+	DBMaxIdleConns       int
+	WSSendQueueSize      int
+	WSBatchMaxSize       int
+	WSBatchFlush         time.Duration
+	WSSnapshotMinUpdates int
+	AllowedOrigins       string
+	InstanceID           string
 }
 
 func LoadConfig() Config {
 	return Config{
-		HTTPAddr:       env("GO_HTTP_ADDR", ":8081"),
-		MySQLHost:      env("MYSQL_HOST", "127.0.0.1"),
-		MySQLPort:      env("MYSQL_PORT", "3306"),
-		MySQLDatabase:  env("MYSQL_DATABASE", "documentation_collab"),
-		MySQLUser:      env("MYSQL_USER", "root"),
-		MySQLPassword:  env("MYSQL_PASSWORD", ""),
-		RedisHost:      env("REDIS_HOST", "127.0.0.1"),
-		RedisPort:      env("REDIS_PORT", "6379"),
-		RedisPassword:  env("REDIS_PASSWORD", ""),
-		RedisTLS:       envBool("REDIS_TLS", false),
-		JWTSecret:      env("JWT_SECRET", ""),
-		JWTTTL:         envDuration("JWT_TTL", 2*time.Hour),
-		BcryptCost:     envInt("BCRYPT_COST", 12),
-		AllowedOrigins: env("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
-		InstanceID:     NewID(),
+		HTTPAddr:             env("GO_HTTP_ADDR", ":8081"),
+		MySQLHost:            env("MYSQL_HOST", "127.0.0.1"),
+		MySQLPort:            env("MYSQL_PORT", "3306"),
+		MySQLDatabase:        env("MYSQL_DATABASE", "documentation_collab"),
+		MySQLUser:            env("MYSQL_USER", "root"),
+		MySQLPassword:        env("MYSQL_PASSWORD", ""),
+		RedisHost:            env("REDIS_HOST", "127.0.0.1"),
+		RedisPort:            env("REDIS_PORT", "6379"),
+		RedisPassword:        env("REDIS_PASSWORD", ""),
+		RedisTLS:             envBool("REDIS_TLS", false),
+		JWTSecret:            env("JWT_SECRET", ""),
+		JWTTTL:               envDuration("JWT_TTL", 2*time.Hour),
+		BcryptCost:           envInt("BCRYPT_COST", 12),
+		DBMaxOpenConns:       envInt("DB_MAX_OPEN_CONNS", 50),
+		DBMaxIdleConns:       envInt("DB_MAX_IDLE_CONNS", 25),
+		WSSendQueueSize:      envInt("WS_SEND_QUEUE_SIZE", 32),
+		WSBatchMaxSize:       envInt("WS_BATCH_MAX_SIZE", 32),
+		WSBatchFlush:         time.Duration(envInt("WS_BATCH_FLUSH_MS", 25)) * time.Millisecond,
+		WSSnapshotMinUpdates: envInt("WS_SNAPSHOT_MIN_UPDATES", 100),
+		AllowedOrigins:       env("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
+		InstanceID:           NewID(),
 	}
 }
 

@@ -9,7 +9,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletionException;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -29,14 +32,33 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
   private final JwtManager jwtManager;
   private final RedisBus redisBus;
   private final MetricsRegistry metrics;
+  private final UpdateBatcher updateBatcher;
+  private final int sendQueueSize;
+  private final int snapshotMinUpdates;
   private final ObjectMapper mapper = new ObjectMapper();
-  private final Map<String, Set<WebSocketSession>> sessions = new ConcurrentHashMap<>();
+  private final Map<String, Set<OutboundWebSocketClient>> sessions = new ConcurrentHashMap<>();
+  private final Map<String, OutboundWebSocketClient> clientsBySession = new ConcurrentHashMap<>();
 
   public DocumentSocketHandler(AppRepository repository, JwtManager jwtManager, RedisBus redisBus, MetricsRegistry metrics) {
+    this(repository, jwtManager, redisBus, metrics, new UpdateBatcher(repository, metrics, 25, 32), 32, 100);
+  }
+
+  @Autowired
+  public DocumentSocketHandler(
+      AppRepository repository,
+      JwtManager jwtManager,
+      RedisBus redisBus,
+      MetricsRegistry metrics,
+      UpdateBatcher updateBatcher,
+      @Value("${app.ws-send-queue-size:32}") int sendQueueSize,
+      @Value("${app.ws-snapshot-min-updates:100}") int snapshotMinUpdates) {
     this.repository = repository;
     this.jwtManager = jwtManager;
     this.redisBus = redisBus;
     this.metrics = metrics;
+    this.updateBatcher = updateBatcher;
+    this.sendQueueSize = Math.max(1, sendQueueSize);
+    this.snapshotMinUpdates = Math.max(1, snapshotMinUpdates);
     this.redisBus.attach(this::broadcastRemote);
   }
 
@@ -78,10 +100,13 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
     for (byte[] update : state.updates()) {
       updates.add(Base64.getEncoder().encodeToString(update));
     }
-    sessions.computeIfAbsent(docId, ignored -> ConcurrentHashMap.newKeySet()).add(session);
-    metrics.observeWebSocketConnect();
+    var client = new OutboundWebSocketClient(session, sendQueueSize, metrics);
     var snapshot = state.snapshot() == null || state.snapshot().length == 0 ? null : Base64.getEncoder().encodeToString(state.snapshot());
-    session.sendMessage(new TextMessage(mapper.writeValueAsString(new WsMessage("sync:init", docId, null, null, null, null, updates, snapshot, state.snapshotSeq(), null, null))));
+    client.enqueue(mapper.writeValueAsString(new WsMessage("sync:init", docId, null, null, null, null, updates, snapshot, state.snapshotSeq(), null, null)));
+    client.start();
+    sessions.computeIfAbsent(docId, ignored -> ConcurrentHashMap.newKeySet()).add(client);
+    clientsBySession.put(session.getId(), client);
+    metrics.observeWebSocketConnect();
   }
 
   @Override
@@ -104,7 +129,12 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
         sendError(session, "UPDATE_TOO_LARGE", "Update is too large.");
         return;
       }
-      repository.appendUpdate(docId, update);
+      try {
+        updateBatcher.append(docId, update).join();
+      } catch (CompletionException ex) {
+        sendError(session, "DATABASE_ERROR", "Could not persist update.");
+        return;
+      }
       var outgoing =
           mapper.createObjectNode()
               .put("type", "sync:update")
@@ -133,6 +163,12 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
         sendError(session, "SNAPSHOT_TOO_LARGE", "Snapshot is too large.");
         return;
       }
+      var state = repository.loadDocumentState(docId);
+      if (!UpdateBatcher.snapshotAllowed(
+          node.path("snapshotSeq").asLong(), state.snapshotSeq(), state.updates().size(), snapshotMinUpdates)) {
+        sendError(session, "SNAPSHOT_NOT_USEFUL", "Snapshot is stale or does not compact enough updates.");
+        return;
+      }
       repository.saveSnapshot(docId, node.path("snapshotSeq").asLong(), snapshot);
       return;
     }
@@ -143,8 +179,10 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
   @Override
   public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
     var docId = (String) session.getAttributes().get("docId");
-    if (docId != null && sessions.containsKey(docId)) {
-      sessions.get(docId).remove(session);
+    var client = clientsBySession.remove(session.getId());
+    if (docId != null && client != null && sessions.containsKey(docId)) {
+      sessions.get(docId).remove(client);
+      client.stop();
       metrics.observeWebSocketDisconnect();
     }
   }
@@ -187,16 +225,27 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
   }
 
   private void broadcastLocal(String docId, String text) throws Exception {
-    for (WebSocketSession target : sessions.getOrDefault(docId, Set.of())) {
-      if (target.isOpen()) {
-        target.sendMessage(new TextMessage(text));
+    var startedAt = System.nanoTime();
+    for (OutboundWebSocketClient target : sessions.getOrDefault(docId, Set.of())) {
+      if (target.session().isOpen()) {
+        target.enqueue(text);
       }
     }
+    metrics.observeWebSocketBroadcast(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt));
+    metrics.observeWebSocketBytes(text.length());
   }
 
   private void sendError(WebSocketSession session, String code, String message) throws Exception {
     var docId = (String) session.getAttributes().get("docId");
-    session.sendMessage(new TextMessage(mapper.writeValueAsString(new WsMessage("error", docId, null, null, null, null, null, null, null, code, message))));
+    metrics.observeWebSocketError(code);
+    var text = mapper.writeValueAsString(new WsMessage("error", docId, null, null, null, null, null, null, null, code, message));
+    var sessionId = session.getId();
+    var client = sessionId == null ? null : clientsBySession.get(sessionId);
+    if (client != null) {
+      client.enqueue(text);
+      return;
+    }
+    session.sendMessage(new TextMessage(text));
   }
 
   private void reject(WebSocketSession session, String code, String message) throws Exception {

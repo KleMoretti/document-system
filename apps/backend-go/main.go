@@ -21,6 +21,8 @@ func main() {
 		log.Fatalf("open mysql: %v", err)
 	}
 	defer db.Close()
+	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 
 	if err := db.Ping(); err != nil {
 		log.Fatalf("ping mysql: %v", err)
