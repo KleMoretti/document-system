@@ -158,7 +158,13 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
         sendError(session, "FORBIDDEN", "You cannot compact this document.");
         return;
       }
-      var snapshot = Base64.getDecoder().decode(node.path("snapshot").asText());
+      byte[] snapshot;
+      try {
+        snapshot = Base64.getDecoder().decode(node.path("snapshot").asText());
+      } catch (IllegalArgumentException ex) {
+        sendError(session, "INVALID_SNAPSHOT", "Snapshot must be base64 encoded.");
+        return;
+      }
       if (snapshot.length > MAX_UPDATE_BYTES) {
         sendError(session, "SNAPSHOT_TOO_LARGE", "Snapshot is too large.");
         return;
