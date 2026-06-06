@@ -237,7 +237,7 @@ func (s *Store) AppendUpdates(ctx context.Context, docID string, updates [][]byt
 		  COALESCE((SELECT MAX(seq) FROM document_updates WHERE document_id = ?), 0),
 		  COALESCE((SELECT MAX(last_seq) FROM document_snapshots WHERE document_id = ?), 0)
 		) + 1
-		ON DUPLICATE KEY UPDATE next_seq = GREATEST(next_seq, VALUES(next_seq))`, docID, docID, docID); err != nil {
+		ON DUPLICATE KEY UPDATE next_seq = next_seq`, docID, docID, docID); err != nil {
 		return err
 	}
 	}
