@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
@@ -153,6 +154,10 @@ public class AppRepository {
     jdbc.update("UPDATE documents SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?", docId);
   }
 
+  public void ping() {
+    jdbc.queryForObject("SELECT 1", Integer.class);
+  }
+
   public List<ShareView> listShares(String docId) {
     return jdbc.query(
         """
@@ -198,18 +203,49 @@ public class AppRepository {
 
   @Transactional
   public void appendUpdate(String docId, byte[] update) {
+    appendUpdates(docId, List.of(update));
+  }
+
+  @Transactional
+  public void appendUpdates(String docId, List<byte[]> updates) {
+    if (updates.isEmpty()) {
+      return;
+    }
     lockDocument(docId);
-    var seq =
-        jdbc.queryForObject(
-            "SELECT COALESCE(MAX(seq), 0) + 1 FROM document_updates WHERE document_id = ? FOR UPDATE",
-            Long.class,
-            docId);
     jdbc.update(
-        "INSERT INTO document_updates (document_id, seq, update_data) VALUES (?, ?, ?)",
+        """
+        INSERT INTO document_sequences (document_id, next_seq)
+        SELECT ?, GREATEST(
+          COALESCE((SELECT MAX(seq) FROM document_updates WHERE document_id = ?), 0),
+          COALESCE((SELECT MAX(last_seq) FROM document_snapshots WHERE document_id = ?), 0)
+        ) + 1
+        ON DUPLICATE KEY UPDATE next_seq = next_seq
+        """,
         docId,
-        seq,
-        update);
-    jdbc.update("UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", docId);
+        docId,
+        docId);
+    var nextSeq =
+        jdbc.queryForObject(
+            "SELECT next_seq FROM document_sequences WHERE document_id = ? FOR UPDATE", Long.class, docId);
+    jdbc.batchUpdate(
+        "INSERT INTO document_updates (document_id, seq, update_data) VALUES (?, ?, ?)",
+        new BatchPreparedStatementSetter() {
+          @Override
+          public void setValues(java.sql.PreparedStatement ps, int index) throws SQLException {
+            ps.setString(1, docId);
+            ps.setLong(2, nextSeq + index);
+            ps.setBytes(3, updates.get(index));
+          }
+
+          @Override
+          public int getBatchSize() {
+            return updates.size();
+          }
+        });
+    jdbc.update("UPDATE document_sequences SET next_seq = ? WHERE document_id = ?", nextSeq + updates.size(), docId);
+    jdbc.update(
+        "UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ? AND updated_at < CURRENT_TIMESTAMP - INTERVAL 5 SECOND",
+        docId);
   }
 
   public List<byte[]> loadUpdates(String docId) {
@@ -217,6 +253,54 @@ public class AppRepository {
         "SELECT update_data FROM document_updates WHERE document_id = ? ORDER BY seq ASC",
         (rs, row) -> rs.getBytes("update_data"),
         docId);
+  }
+
+  public DocumentState loadDocumentState(String docId) {
+    byte[] snapshot = null;
+    long snapshotSeq = 0;
+    try {
+      var snapshotRow =
+          jdbc.queryForObject(
+              """
+              SELECT snapshot_data, last_seq
+              FROM document_snapshots
+              WHERE document_id = ?
+              ORDER BY last_seq DESC
+              LIMIT 1
+              """,
+              (rs, row) -> new DocumentState(rs.getBytes("snapshot_data"), rs.getLong("last_seq"), List.of()),
+              docId);
+      snapshot = snapshotRow.snapshot();
+      snapshotSeq = snapshotRow.snapshotSeq();
+    } catch (EmptyResultDataAccessException ignored) {
+      snapshot = null;
+      snapshotSeq = 0;
+    }
+    var updates =
+        jdbc.query(
+            "SELECT update_data FROM document_updates WHERE document_id = ? AND seq > ? ORDER BY seq ASC",
+            (rs, row) -> rs.getBytes("update_data"),
+            docId,
+            snapshotSeq);
+    return new DocumentState(snapshot, snapshotSeq, updates);
+  }
+
+  @Transactional
+  public void saveSnapshot(String docId, long lastSeq, byte[] snapshot) {
+    if (lastSeq <= 0) {
+      throw new BadRequestException("Snapshot sequence must be positive.");
+    }
+    lockDocument(docId);
+    jdbc.update(
+        """
+        INSERT INTO document_snapshots (document_id, last_seq, snapshot_data)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE snapshot_data = VALUES(snapshot_data), created_at = CURRENT_TIMESTAMP
+        """,
+        docId,
+        lastSeq,
+        snapshot);
+    jdbc.update("DELETE FROM document_updates WHERE document_id = ? AND seq <= ?", docId, lastSeq);
   }
 
   public List<DocumentVersionSummary> listVersions(String docId) {
@@ -233,15 +317,21 @@ public class AppRepository {
 
   public DocumentVersionSummary createVersion(String docId, String userId, String label) {
     var id = UUID.randomUUID().toString();
+    var state = loadDocumentState(docId);
+    var rawUpdates = new ArrayList<byte[]>();
+    if (state.snapshot() != null && state.snapshot().length > 0) {
+      rawUpdates.add(state.snapshot());
+    }
+    rawUpdates.addAll(state.updates());
     var updates =
-        loadUpdates(docId).stream().map(update -> Base64.getEncoder().encodeToString(update)).toList();
-    var state = String.join("\n", updates).getBytes(StandardCharsets.UTF_8);
+        rawUpdates.stream().map(update -> Base64.getEncoder().encodeToString(update)).toList();
+    var versionState = String.join("\n", updates).getBytes(StandardCharsets.UTF_8);
     jdbc.update(
         "INSERT INTO document_versions (id, document_id, label, state_data, created_by) VALUES (?, ?, ?, ?, ?)",
         id,
         docId,
         label == null || label.isBlank() ? "Manual version" : label.trim(),
-        state,
+        versionState,
         userId);
     return getVersionSummary(docId, id);
   }
@@ -270,6 +360,7 @@ public class AppRepository {
     var version = getVersion(docId, versionId);
     lockDocument(docId);
     jdbc.update("DELETE FROM document_updates WHERE document_id = ?", docId);
+    jdbc.update("DELETE FROM document_snapshots WHERE document_id = ?", docId);
     long seq = 1;
     for (String update : version.updates()) {
       jdbc.update(
@@ -279,6 +370,14 @@ public class AppRepository {
           Base64.getDecoder().decode(update));
       seq += 1;
     }
+    jdbc.update(
+        """
+        INSERT INTO document_sequences (document_id, next_seq)
+        VALUES (?, ?)
+        ON DUPLICATE KEY UPDATE next_seq = VALUES(next_seq)
+        """,
+        docId,
+        seq);
     jdbc.update("UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", docId);
   }
 

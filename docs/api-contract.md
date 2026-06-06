@@ -2,6 +2,11 @@
 
 Both backends expose the same REST and WebSocket surface.
 
+Operational endpoints:
+
+- `GET /healthz` returns `{ "status": "ok" }` when the backend process is alive.
+- `GET /readyz` returns `{ "status": "ready" }` when required dependencies are reachable, or HTTP 503 when the backend is not ready.
+
 Errors use this shape:
 
 ```json
@@ -41,6 +46,13 @@ Versions:
 - `GET /api/documents/{docId}/versions` returns version summaries.
 - `GET /api/documents/{docId}/versions/{versionId}` returns version metadata plus Base64 Yjs `updates`.
 - `POST /api/documents/{docId}/versions/{versionId}/restore` replaces persisted document updates with that version and requires `owner` or `editor`.
+- Version restore broadcasts WebSocket `document:restored`; active clients should reload the document before sending more updates.
+
+Snapshots:
+
+- Backends may return `snapshot` and `snapshotSeq` in `sync:init`.
+- Clients must apply `snapshot` before `updates`.
+- Editors may send `sync:snapshot` to compact old Yjs updates without changing the canonical document model.
 
 Comments:
 

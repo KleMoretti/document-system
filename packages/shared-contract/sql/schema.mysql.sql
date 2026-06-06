@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS document_permissions (
   CONSTRAINT fk_permissions_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE IF NOT EXISTS document_sequences (
+  document_id VARCHAR(36) PRIMARY KEY,
+  next_seq BIGINT NOT NULL DEFAULT 1,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_sequences_document FOREIGN KEY (document_id) REFERENCES documents(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE IF NOT EXISTS document_updates (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   document_id VARCHAR(36) NOT NULL,
@@ -35,6 +42,15 @@ CREATE TABLE IF NOT EXISTS document_updates (
   UNIQUE KEY uq_document_updates_seq (document_id, seq),
   KEY idx_document_updates_document (document_id, id),
   CONSTRAINT fk_updates_document FOREIGN KEY (document_id) REFERENCES documents(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS document_snapshots (
+  document_id VARCHAR(36) NOT NULL,
+  last_seq BIGINT NOT NULL,
+  snapshot_data MEDIUMBLOB NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (document_id, last_seq),
+  CONSTRAINT fk_snapshots_document FOREIGN KEY (document_id) REFERENCES documents(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS document_versions (

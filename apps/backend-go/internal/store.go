@@ -158,6 +158,10 @@ func (s *Store) RestoreDocument(ctx context.Context, docID string) error {
 	return err
 }
 
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
+
 func (s *Store) GetRole(ctx context.Context, userID, docID string) (string, error) {
 	row := s.db.QueryRowContext(ctx, "SELECT role FROM document_permissions WHERE document_id = ? AND user_id = ?", docID, userID)
 	var role string
@@ -212,6 +216,13 @@ func (s *Store) RemoveShare(ctx context.Context, docID, userID string) error {
 }
 
 func (s *Store) AppendUpdate(ctx context.Context, docID string, update []byte) error {
+	return s.AppendUpdates(ctx, docID, [][]byte{update})
+}
+
+func (s *Store) AppendUpdates(ctx context.Context, docID string, updates [][]byte) error {
+	if len(updates) == 0 {
+		return nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -220,17 +231,30 @@ func (s *Store) AppendUpdate(ctx context.Context, docID string, update []byte) e
 	if err := lockDocument(ctx, tx, docID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO document_sequences (document_id, next_seq)
+		SELECT ?, GREATEST(
+		  COALESCE((SELECT MAX(seq) FROM document_updates WHERE document_id = ?), 0),
+		  COALESCE((SELECT MAX(last_seq) FROM document_snapshots WHERE document_id = ?), 0)
+		) + 1
+		ON DUPLICATE KEY UPDATE next_seq = next_seq`, docID, docID, docID); err != nil {
+		return err
+	}
 
 	var nextSeq int64
-	row := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(seq), 0) + 1 FROM document_updates WHERE document_id = ? FOR UPDATE", docID)
+	row := tx.QueryRowContext(ctx, "SELECT next_seq FROM document_sequences WHERE document_id = ? FOR UPDATE", docID)
 	if err := row.Scan(&nextSeq); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO document_updates (document_id, seq, update_data) VALUES (?, ?, ?)", docID, nextSeq, update); err != nil {
+	for index, update := range updates {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO document_updates (document_id, seq, update_data) VALUES (?, ?, ?)", docID, nextSeq+int64(index), update); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE document_sequences SET next_seq = ? WHERE document_id = ?", nextSeq+int64(len(updates)), docID); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, "UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", docID)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ? AND updated_at < CURRENT_TIMESTAMP - INTERVAL 5 SECOND", docID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -252,6 +276,56 @@ func (s *Store) LoadUpdates(ctx context.Context, docID string) ([][]byte, error)
 		updates = append(updates, update)
 	}
 	return updates, rows.Err()
+}
+
+func (s *Store) LoadDocumentState(ctx context.Context, docID string) (DocumentState, error) {
+	state := DocumentState{}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT snapshot_data, last_seq
+		FROM document_snapshots
+		WHERE document_id = ?
+		ORDER BY last_seq DESC
+		LIMIT 1`, docID)
+	if err := row.Scan(&state.Snapshot, &state.SnapshotSeq); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return state, err
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT update_data FROM document_updates WHERE document_id = ? AND seq > ? ORDER BY seq ASC", docID, state.SnapshotSeq)
+	if err != nil {
+		return state, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var update []byte
+		if err := rows.Scan(&update); err != nil {
+			return state, err
+		}
+		state.Updates = append(state.Updates, update)
+	}
+	return state, rows.Err()
+}
+
+func (s *Store) SaveSnapshot(ctx context.Context, docID string, lastSeq int64, snapshot []byte) error {
+	if lastSeq <= 0 {
+		return errors.New("snapshot sequence must be positive")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockDocument(ctx, tx, docID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO document_snapshots (document_id, last_seq, snapshot_data)
+		VALUES (?, ?, ?)
+		ON DUPLICATE KEY UPDATE snapshot_data = VALUES(snapshot_data), created_at = CURRENT_TIMESTAMP`, docID, lastSeq, snapshot); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM document_updates WHERE document_id = ? AND seq <= ?", docID, lastSeq); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ListVersions(ctx context.Context, docID string) ([]DocumentVersionSummary, error) {
@@ -279,9 +353,13 @@ func (s *Store) CreateVersion(ctx context.Context, docID, userID, label string) 
 	if strings.TrimSpace(label) == "" {
 		label = "Manual version"
 	}
-	updates, err := s.LoadUpdates(ctx, docID)
+	state, err := s.LoadDocumentState(ctx, docID)
 	if err != nil {
 		return DocumentVersionSummary{}, err
+	}
+	updates := state.Updates
+	if len(state.Snapshot) > 0 {
+		updates = append([][]byte{state.Snapshot}, updates...)
 	}
 	encoded := make([]string, 0, len(updates))
 	for _, update := range updates {
@@ -343,6 +421,9 @@ func (s *Store) RestoreVersion(ctx context.Context, docID, versionID string) err
 	if _, err := tx.ExecContext(ctx, "DELETE FROM document_updates WHERE document_id = ?", docID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM document_snapshots WHERE document_id = ?", docID); err != nil {
+		return err
+	}
 	for index, update := range version.Updates {
 		decoded, err := base64.StdEncoding.DecodeString(update)
 		if err != nil {
@@ -353,6 +434,13 @@ func (s *Store) RestoreVersion(ctx context.Context, docID, versionID string) err
 			docID, index+1, decoded); err != nil {
 			return err
 		}
+	}
+	nextSeq := int64(len(version.Updates) + 1)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO document_sequences (document_id, next_seq)
+		VALUES (?, ?)
+		ON DUPLICATE KEY UPDATE next_seq = VALUES(next_seq)`, docID, nextSeq); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE documents SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", docID); err != nil {
 		return err

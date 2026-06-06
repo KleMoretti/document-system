@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +24,7 @@ type wsMessage struct {
 	DisplayName string `json:"displayName,omitempty"`
 	Color       string `json:"color,omitempty"`
 	Update      string `json:"update,omitempty"`
+	Code        string `json:"code,omitempty"`
 }
 
 type latencySummary struct {
@@ -30,6 +33,8 @@ type latencySummary struct {
 	P95   time.Duration
 	Max   time.Duration
 }
+
+const maxWriteDuration = 2 * time.Second
 
 func main() {
 	target := flag.String("url", "ws://localhost:18080/ws/documents", "WebSocket document base URL.")
@@ -51,10 +56,22 @@ func main() {
 	wsURL := documentURL(*target, *docID)
 	headers := http.Header{"Sec-WebSocket-Protocol": []string{"bearer, " + *token}}
 	deadline := time.Now().Add(*duration)
-	results := make(chan time.Duration, *clients*16)
+	writeResults := make(chan time.Duration, *clients*16)
+	receiveResults := make(chan time.Duration, *clients*16)
 	var sent atomic.Uint64
+	var received atomic.Uint64
 	var errors atomic.Uint64
 	var connected atomic.Uint64
+	var disconnects atomic.Uint64
+	errorCodes := map[string]uint64{}
+	var errorCodesMu sync.Mutex
+	errorStages := map[string]uint64{}
+	var errorStagesMu sync.Mutex
+	recordErrorStage := func(stage string) {
+		errorStagesMu.Lock()
+		errorStages[stage]++
+		errorStagesMu.Unlock()
+	}
 	var wg sync.WaitGroup
 
 	for i := 0; i < *clients; i++ {
@@ -64,49 +81,104 @@ func main() {
 			conn, _, err := websocket.DefaultDialer.Dial(wsURL, headers)
 			if err != nil {
 				errors.Add(1)
+				recordErrorStage("dial")
 				return
 			}
 			defer conn.Close()
 			connected.Add(1)
 			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-			_, _, _ = conn.ReadMessage()
+			if _, _, err := conn.ReadMessage(); err != nil {
+				errors.Add(1)
+				recordErrorStage("init")
+				return
+			}
+			_ = conn.SetReadDeadline(time.Time{})
+
+			readerDone := make(chan struct{})
+			go func() {
+				defer close(readerDone)
+				for {
+					var incoming wsMessage
+					if err := conn.ReadJSON(&incoming); err != nil {
+						if time.Now().Before(deadline) {
+							disconnects.Add(1)
+							recordErrorStage("read")
+						}
+						return
+					}
+					received.Add(1)
+					if incoming.Type == "error" && incoming.Code != "" {
+						errorCodesMu.Lock()
+						errorCodes[incoming.Code]++
+						errorCodesMu.Unlock()
+					}
+					if latency, ok := receiveLatency(incoming); ok {
+						recordDuration(receiveResults, latency)
+					}
+					if time.Now().After(deadline) {
+						return
+					}
+				}
+			}()
 
 			ticker := time.NewTicker(*interval)
 			defer ticker.Stop()
 			for time.Now().Before(deadline) {
 				<-ticker.C
+				if !shouldWriteMessage(time.Now(), deadline) {
+					break
+				}
 				message := messageFor(*mode, index)
 				start := time.Now()
-				if err := conn.WriteJSON(message); err != nil {
+				if err := writeJSONWithDeadline(conn, message, deadline, start, maxWriteDuration); err != nil {
 					errors.Add(1)
+					recordErrorStage("write")
 					return
 				}
-				results <- time.Since(start)
+				recordDuration(writeResults, time.Since(start))
 				sent.Add(1)
+			}
+			_ = conn.Close()
+			select {
+			case <-readerDone:
+			case <-time.After(2 * time.Second):
+				disconnects.Add(1)
 			}
 		}(i)
 	}
 
 	wg.Wait()
-	close(results)
+	close(writeResults)
+	close(receiveResults)
 
-	latencies := make([]time.Duration, 0, len(results))
-	for latency := range results {
-		latencies = append(latencies, latency)
+	writeLatencies := drainDurations(writeResults)
+	receiveLatencies := drainDurations(receiveResults)
+	errorCodesMu.Lock()
+	errorCodeSnapshot := map[string]uint64{}
+	for code, count := range errorCodes {
+		errorCodeSnapshot[code] = count
 	}
-	summary := summarizeLatencies(latencies)
-	report := map[string]any{
-		"target":        wsURL,
-		"clients":       *clients,
-		"connected":     connected.Load(),
-		"sent":          sent.Load(),
-		"errors":        errors.Load(),
-		"duration":      duration.String(),
-		"latency_count": summary.Count,
-		"latency_p50":   summary.P50.String(),
-		"latency_p95":   summary.P95.String(),
-		"latency_max":   summary.Max.String(),
+	errorCodesMu.Unlock()
+	errorStagesMu.Lock()
+	errorStageSnapshot := map[string]uint64{}
+	for stage, count := range errorStages {
+		errorStageSnapshot[stage] = count
 	}
+	errorStagesMu.Unlock()
+	report := buildReport(reportInput{
+		Target:         wsURL,
+		Clients:        *clients,
+		Connected:      connected.Load(),
+		Sent:           sent.Load(),
+		Received:       received.Load(),
+		Errors:         errors.Load(),
+		Disconnects:    disconnects.Load(),
+		Duration:       *duration,
+		WriteLatency:   writeLatencies,
+		ReceiveLatency: receiveLatencies,
+		ErrorCodes:     errorCodeSnapshot,
+		ErrorStages:    errorStageSnapshot,
+	})
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {
@@ -124,10 +196,111 @@ func documentURL(base string, docID string) string {
 }
 
 func messageFor(mode string, index int) wsMessage {
+	now := time.Now().UnixNano()
 	if mode == "update" {
-		return wsMessage{Type: "sync:update", Update: base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("load-%d", index)))}
+		return wsMessage{Type: "sync:update", Update: base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("load-%d-%d", index, now)))}
 	}
-	return wsMessage{Type: "presence:update", DisplayName: fmt.Sprintf("load-user-%d", index), Color: "#2563eb"}
+	return wsMessage{Type: "presence:update", DisplayName: fmt.Sprintf("load-user-%d-%d", index, now), Color: "#2563eb"}
+}
+
+type websocketJSONWriter interface {
+	SetWriteDeadline(time.Time) error
+	WriteJSON(any) error
+}
+
+func writeJSONWithDeadline(conn websocketJSONWriter, message wsMessage, overallDeadline time.Time, now time.Time, maxDuration time.Duration) error {
+	writeDeadline := now.Add(maxDuration)
+	if overallDeadline.Before(writeDeadline) {
+		writeDeadline = overallDeadline
+	}
+	if err := conn.SetWriteDeadline(writeDeadline); err != nil {
+		return err
+	}
+	return conn.WriteJSON(message)
+}
+
+func recordDuration(values chan<- time.Duration, value time.Duration) {
+	select {
+	case values <- value:
+	default:
+	}
+}
+
+func shouldWriteMessage(now time.Time, deadline time.Time) bool {
+	return now.Before(deadline)
+}
+
+type reportInput struct {
+	Target         string
+	Clients        int
+	Connected      uint64
+	Sent           uint64
+	Received       uint64
+	Errors         uint64
+	Disconnects    uint64
+	Duration       time.Duration
+	WriteLatency   []time.Duration
+	ReceiveLatency []time.Duration
+	ErrorCodes     map[string]uint64
+	ErrorStages    map[string]uint64
+}
+
+func buildReport(input reportInput) map[string]any {
+	writeSummary := summarizeLatencies(input.WriteLatency)
+	receiveSummary := summarizeLatencies(input.ReceiveLatency)
+	return map[string]any{
+		"target":                input.Target,
+		"clients":               input.Clients,
+		"connected":             input.Connected,
+		"sent":                  input.Sent,
+		"received":              input.Received,
+		"errors":                input.Errors,
+		"disconnects":           input.Disconnects,
+		"error_codes":           input.ErrorCodes,
+		"error_stages":          input.ErrorStages,
+		"duration":              input.Duration.String(),
+		"latency_count":         writeSummary.Count,
+		"latency_p50":           writeSummary.P50.String(),
+		"latency_p95":           writeSummary.P95.String(),
+		"latency_max":           writeSummary.Max.String(),
+		"receive_latency_count": receiveSummary.Count,
+		"receive_latency_p50":   receiveSummary.P50.String(),
+		"receive_latency_p95":   receiveSummary.P95.String(),
+		"receive_latency_max":   receiveSummary.Max.String(),
+	}
+}
+
+func drainDurations(values <-chan time.Duration) []time.Duration {
+	latencies := make([]time.Duration, 0, len(values))
+	for latency := range values {
+		latencies = append(latencies, latency)
+	}
+	return latencies
+}
+
+func receiveLatency(message wsMessage) (time.Duration, bool) {
+	var encoded string
+	switch message.Type {
+	case "sync:update":
+		decoded, err := base64.StdEncoding.DecodeString(message.Update)
+		if err != nil {
+			return 0, false
+		}
+		encoded = string(decoded)
+	case "presence:update":
+		encoded = message.DisplayName
+	default:
+		return 0, false
+	}
+	parts := strings.Split(encoded, "-")
+	if len(parts) == 0 {
+		return 0, false
+	}
+	sentAt, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return time.Since(time.Unix(0, sentAt)), true
 }
 
 func summarizeLatencies(values []time.Duration) latencySummary {

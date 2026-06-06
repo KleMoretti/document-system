@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -22,6 +23,8 @@ type WSMessage struct {
 	Color       string         `json:"color,omitempty"`
 	Update      string         `json:"update,omitempty"`
 	Updates     []string       `json:"updates,omitempty"`
+	Snapshot    string         `json:"snapshot,omitempty"`
+	SnapshotSeq int64          `json:"snapshotSeq,omitempty"`
 	CommentID   string         `json:"commentId,omitempty"`
 	Comment     *CommentThread `json:"comment,omitempty"`
 	Code        string         `json:"code,omitempty"`
@@ -36,12 +39,14 @@ type Client struct {
 	conn      *websocket.Conn
 	send      chan []byte
 	closeOnce sync.Once
+	metrics   *Metrics
 }
 
 type Hub struct {
 	instanceID string
 	mu         sync.RWMutex
 	clients    map[string]map[*Client]struct{}
+	metrics    *Metrics
 }
 
 func NewHub(instanceID string) *Hub {
@@ -67,11 +72,15 @@ func (h *Hub) Unregister(client *Client) {
 }
 
 func (h *Hub) BroadcastRaw(docID string, payload []byte) {
+	start := time.Now()
 	var slowClients []*Client
 	h.mu.RLock()
 	for client := range h.clients[docID] {
 		select {
 		case client.send <- payload:
+			if h.metrics != nil {
+				h.metrics.ObserveWebSocketQueueDepth(len(client.send))
+			}
 		default:
 			slowClients = append(slowClients, client)
 		}
@@ -83,6 +92,10 @@ func (h *Hub) BroadcastRaw(docID string, payload []byte) {
 		if client.conn != nil {
 			_ = client.conn.Close()
 		}
+	}
+	if h.metrics != nil {
+		h.metrics.ObserveWebSocketBroadcast(time.Since(start).Milliseconds())
+		h.metrics.ObserveWebSocketBytes(len(payload))
 	}
 }
 
@@ -114,13 +127,17 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	updates, err := s.store.LoadUpdates(r.Context(), docID)
+	state, err := s.store.LoadDocumentState(r.Context(), docID)
 	if err != nil {
 		_ = conn.WriteJSON(WSMessage{Type: "error", DocID: docID, Code: "SYNC_INIT_FAILED", Message: "Could not load document state."})
 		_ = conn.Close()
 		return
 	}
-	client := &Client{docID: docID, userID: claims.UserID, conn: conn, send: make(chan []byte, 32)}
+	queueSize := s.cfg.WSSendQueueSize
+	if queueSize <= 0 {
+		queueSize = 32
+	}
+	client := &Client{docID: docID, userID: claims.UserID, conn: conn, send: make(chan []byte, queueSize), metrics: s.metrics}
 	s.hub.Register(client)
 	s.metrics.ObserveWebSocketConnect()
 	defer func() {
@@ -128,11 +145,15 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 		s.metrics.ObserveWebSocketDisconnect()
 	}()
 
-	encoded := make([]string, 0, len(updates))
-	for _, update := range updates {
+	encoded := make([]string, 0, len(state.Updates))
+	for _, update := range state.Updates {
 		encoded = append(encoded, base64.StdEncoding.EncodeToString(update))
 	}
-	_ = conn.WriteJSON(WSMessage{Type: "sync:init", DocID: docID, Updates: encoded})
+	initMessage := WSMessage{Type: "sync:init", DocID: docID, Updates: encoded, SnapshotSeq: state.SnapshotSeq}
+	if len(state.Snapshot) > 0 {
+		initMessage.Snapshot = base64.StdEncoding.EncodeToString(state.Snapshot)
+	}
+	_ = conn.WriteJSON(initMessage)
 
 	go writePump(client)
 	readPump(r.Context(), s, client, role)
@@ -172,13 +193,44 @@ func readPump(ctx context.Context, s *Server, client *Client, role string) {
 				sendError(client, "UPDATE_TOO_LARGE", "Update is too large.")
 				continue
 			}
-			if err := s.store.AppendUpdate(ctx, client.docID, update); err != nil {
+			appendUpdate := s.store.AppendUpdate
+			if s.batcher != nil {
+				appendUpdate = s.batcher.Append
+			}
+			if err := appendUpdate(context.Background(), client.docID, update); err != nil {
 				sendError(client, "DATABASE_ERROR", "Could not persist update.")
 				continue
 			}
 			broadcast(s, msg)
 		case "presence:update":
 			broadcast(s, msg)
+		case "sync:snapshot":
+			if !CanEdit(role) {
+				sendError(client, "FORBIDDEN", "You cannot compact this document.")
+				continue
+			}
+			snapshot, err := base64.StdEncoding.DecodeString(msg.Snapshot)
+			if err != nil {
+				sendError(client, "INVALID_SNAPSHOT", "Snapshot must be base64 encoded.")
+				continue
+			}
+			if !updateAllowed(snapshot) {
+				sendError(client, "SNAPSHOT_TOO_LARGE", "Snapshot is too large.")
+				continue
+			}
+			state, err := s.store.LoadDocumentState(ctx, client.docID)
+			if err != nil {
+				sendError(client, "DATABASE_ERROR", "Could not inspect snapshot state.")
+				continue
+			}
+			if !snapshotAllowed(msg.SnapshotSeq, state.SnapshotSeq, len(state.Updates), s.cfg.WSSnapshotMinUpdates) {
+				sendError(client, "SNAPSHOT_NOT_USEFUL", "Snapshot is stale or does not compact enough updates.")
+				continue
+			}
+			if err := s.store.SaveSnapshot(ctx, client.docID, msg.SnapshotSeq, snapshot); err != nil {
+				sendError(client, "DATABASE_ERROR", "Could not persist snapshot.")
+				continue
+			}
 		default:
 			sendError(client, "UNKNOWN_MESSAGE", "Unknown websocket message type.")
 		}
@@ -196,6 +248,9 @@ func broadcast(s *Server, msg WSMessage) {
 }
 
 func sendError(client *Client, code, message string) {
+	if client.metrics != nil {
+		client.metrics.ObserveWebSocketError(code)
+	}
 	payload, _ := json.Marshal(WSMessage{Type: "error", DocID: client.docID, Code: code, Message: message})
 	select {
 	case client.send <- payload:
@@ -204,6 +259,10 @@ func sendError(client *Client, code, message string) {
 }
 
 func notifySlowClient(client *Client) {
+	if client.metrics != nil {
+		client.metrics.ObserveWebSocketError("SLOW_CLIENT")
+		client.metrics.ObserveWebSocketSlowClient()
+	}
 	payload, _ := json.Marshal(WSMessage{Type: "error", DocID: client.docID, Code: "SLOW_CLIENT", Message: "Connection closed because the client is not keeping up."})
 	select {
 	case client.send <- payload:
@@ -218,6 +277,13 @@ func notifySlowClient(client *Client) {
 	case client.send <- payload:
 	default:
 	}
+}
+
+func snapshotAllowed(requestedSeq int64, currentSnapshotSeq int64, updatesCount int, minUpdates int) bool {
+	if minUpdates <= 0 {
+		minUpdates = 100
+	}
+	return updatesCount >= minUpdates && requestedSeq == currentSnapshotSeq+int64(updatesCount)
 }
 
 func updateAllowed(update []byte) bool {

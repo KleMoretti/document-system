@@ -110,3 +110,9 @@ type APIError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+type DocumentState struct {
+	Snapshot    []byte
+	SnapshotSeq int64
+	Updates     [][]byte
+}

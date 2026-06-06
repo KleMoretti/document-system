@@ -15,6 +15,8 @@ type SocketMessage = {
   userId?: string;
   update?: string;
   updates?: string[];
+  snapshot?: string;
+  snapshotSeq?: number;
   displayName?: string;
   color?: string;
   code?: string;
@@ -30,6 +32,10 @@ type Props = {
   initialImport?: PendingImport;
   onInitialImportApplied?: (docId: string) => void;
 };
+
+export const UPDATE_BATCH_FLUSH_MS = 35;
+export const UPDATE_BATCH_RETRY_MS = 50;
+export const SOCKET_BACKPRESSURE_BYTES = 1024 * 1024;
 
 export function CollaborativeEditor({
   docId,
@@ -76,6 +82,15 @@ export function CollaborativeEditor({
     let reconnectTimer: number | null = null;
     let cancelled = false;
     let attempts = 0;
+    const updateBatcher = createUpdateBatcher({
+      flushDelayMs: UPDATE_BATCH_FLUSH_MS,
+      retryDelayMs: UPDATE_BATCH_RETRY_MS,
+      canSend: () =>
+        socket?.readyState === WebSocket.OPEN && shouldSendRealtimeMessage(socket.bufferedAmount),
+      send: (update) => {
+        socket?.send(JSON.stringify({ type: 'sync:update', update: bytesToBase64(update) }));
+      }
+    });
 
     const scheduleReconnect = () => {
       if (cancelled || reconnectTimer !== null) {
@@ -99,13 +114,15 @@ export function CollaborativeEditor({
       socket.addEventListener('open', () => {
         attempts = 0;
         setStatus('connected');
-        socket?.send(
-          JSON.stringify({
-            type: 'presence:update',
-            displayName,
-            color: colorFor(displayName)
-          })
-        );
+        if (socket && shouldSendRealtimeMessage(socket.bufferedAmount)) {
+          socket.send(
+            JSON.stringify({
+              type: 'presence:update',
+              displayName,
+              color: colorFor(displayName)
+            })
+          );
+        }
       });
 
       socket.addEventListener('close', scheduleReconnect);
@@ -114,8 +131,25 @@ export function CollaborativeEditor({
       socket.addEventListener('message', (event) => {
         const msg = JSON.parse(event.data as string) as SocketMessage;
         if (msg.type === 'sync:init') {
-          msg.updates?.forEach((update) => Y.applyUpdate(ydoc, base64ToBytes(update), 'remote'));
-          if (shouldApplyInitialImport(initialImport, docId, msg.updates)) {
+          applySyncInitUpdates(ydoc, msg);
+          if (
+            socket?.readyState === WebSocket.OPEN &&
+            shouldSubmitSnapshot({
+              readOnly,
+              updatesCount: msg.updates?.length ?? 0,
+              snapshotSeq: msg.snapshotSeq ?? 0
+            })
+          ) {
+            socket.send(
+              JSON.stringify({
+                type: 'sync:snapshot',
+                snapshot: bytesToBase64(Y.encodeStateAsUpdate(ydoc)),
+                snapshotSeq: (msg.snapshotSeq ?? 0) + (msg.updates?.length ?? 0)
+              })
+            );
+          }
+          const persistedUpdates = msg.snapshot ? ['snapshot', ...(msg.updates ?? [])] : msg.updates;
+          if (shouldApplyInitialImport(initialImport, docId, persistedUpdates)) {
             editor.commands.setContent(initialImport!.html);
             onInitialImportApplied?.(docId);
           }
@@ -125,6 +159,9 @@ export function CollaborativeEditor({
         }
         if (msg.type === 'presence:update' && msg.displayName) {
           setOnline((current) => ({ ...current, [msg.displayName!]: Date.now() }));
+        }
+        if (msg.type === 'document:restored') {
+          window.location.reload();
         }
         if (msg.type === 'error') {
           if (!shouldReconnectAfterSocketError(msg.code)) {
@@ -139,7 +176,7 @@ export function CollaborativeEditor({
       if (origin === 'remote' || socket?.readyState !== WebSocket.OPEN || readOnly) {
         return;
       }
-      socket.send(JSON.stringify({ type: 'sync:update', update: bytesToBase64(update) }));
+      updateBatcher.enqueue(update);
     };
     ydoc.on('update', onUpdate);
     connect();
@@ -150,6 +187,8 @@ export function CollaborativeEditor({
         window.clearTimeout(reconnectTimer);
       }
       ydoc.off('update', onUpdate);
+      updateBatcher.flush();
+      updateBatcher.dispose();
       socket?.close();
     };
   }, [displayName, docId, editor, initialImport, onInitialImportApplied, readOnly, token, ydoc]);
@@ -234,6 +273,90 @@ export function nextReconnectDelay(attempts: number): { delay: number; nextAttem
     return { delay: 0, nextAttempts: attempts, shouldReconnect: false };
   }
   return { delay: Math.min(1000 * 2 ** attempts, 10000), nextAttempts: attempts + 1, shouldReconnect: true };
+}
+
+export function applySyncInitUpdates(ydoc: Y.Doc, msg: Pick<SocketMessage, 'snapshot' | 'updates'>) {
+  if (msg.snapshot) {
+    Y.applyUpdate(ydoc, base64ToBytes(msg.snapshot), 'remote');
+  }
+  msg.updates?.forEach((update) => Y.applyUpdate(ydoc, base64ToBytes(update), 'remote'));
+}
+
+export function shouldSubmitSnapshot({
+  readOnly,
+  updatesCount
+}: {
+  readOnly: boolean;
+  updatesCount: number;
+  snapshotSeq: number;
+}): boolean {
+  return !readOnly && updatesCount >= 100;
+}
+
+export function shouldSendRealtimeMessage(
+  bufferedAmount: number,
+  maxBufferedAmount: number = SOCKET_BACKPRESSURE_BYTES
+): boolean {
+  return bufferedAmount <= maxBufferedAmount;
+}
+
+export function createUpdateBatcher({
+  send,
+  canSend = () => true,
+  flushDelayMs = UPDATE_BATCH_FLUSH_MS,
+  retryDelayMs = UPDATE_BATCH_RETRY_MS
+}: {
+  send: (update: Uint8Array) => void;
+  canSend?: () => boolean;
+  flushDelayMs?: number;
+  retryDelayMs?: number;
+}) {
+  let queued: Uint8Array[] = [];
+  let timer: number | null = null;
+  let disposed = false;
+
+  const schedule = (delay: number) => {
+    if (disposed || timer !== null) {
+      return;
+    }
+    timer = window.setTimeout(flush, delay);
+  };
+
+  const flush = () => {
+    if (timer !== null) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+    if (disposed || queued.length === 0) {
+      return;
+    }
+    if (!canSend()) {
+      schedule(retryDelayMs);
+      return;
+    }
+    const batch = queued;
+    queued = [];
+    send(batch.length === 1 ? batch[0] : Y.mergeUpdates(batch));
+  };
+
+  return {
+    enqueue(update: Uint8Array) {
+      if (disposed) {
+        return;
+      }
+      queued.push(update);
+      schedule(flushDelayMs);
+    },
+    flush,
+    dispose() {
+      disposed = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      queued = [];
+    }
+  };
 }
 
 function printHtml(htmlDocument: string) {
