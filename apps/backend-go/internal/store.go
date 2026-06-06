@@ -240,7 +240,6 @@ func (s *Store) AppendUpdates(ctx context.Context, docID string, updates [][]byt
 		ON DUPLICATE KEY UPDATE next_seq = next_seq`, docID, docID, docID); err != nil {
 		return err
 	}
-	}
 
 	var nextSeq int64
 	row := tx.QueryRowContext(ctx, "SELECT next_seq FROM document_sequences WHERE document_id = ? FOR UPDATE", docID)
