@@ -20,12 +20,13 @@ public class HealthController {
   }
 
   @GetMapping("/readyz")
-  Map<String, String> readyz() {
+  org.springframework.http.ResponseEntity<Map<String, String>> readyz() {
     try {
       repository.ping();
-      return Map.of("status", "ready");
+      return org.springframework.http.ResponseEntity.ok(Map.of("status", "ready"));
     } catch (RuntimeException ex) {
-      throw new NotReadyException("Dependencies are not ready.");
+      return org.springframework.http.ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+          .body(Map.of("status", "not_ready"));
     }
   }
 }
