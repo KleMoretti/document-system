@@ -350,11 +350,13 @@ Java 后端位于 `apps/backend-java`，主要技术栈：
 - `AuthController.java`：注册、登录、当前用户。
 - `DocumentController.java`：文档、分享、版本、评论 REST API。
 - `DocumentSocketHandler.java`：WebSocket 协同同步。
-- `AppRepository.java`：全部 MySQL 读写。
+- `AuthRepository.java`、`DocumentRepository.java`、`RealtimeRepository.java`：按 auth、document、realtime 角色拆分 MySQL 读写；`AppRepository.java` 保留给 `all` 单体兼容路径。
 - `Models.java`：REST、WebSocket 和仓储返回模型。
 - `Roles.java`：角色能力判断。
 - `JwtManager.java`：HS256 JWT 签发与校验。
 - `RedisBus.java`：Redis Pub/Sub 跨实例广播。
+- `ServiceRole.java`、`ConditionalOnRole.java`：根据 `APP_SERVICE_ROLE` 控制 Bean 和接口是否启用。
+- `AuthInternalClient.java`、`AuthInternalController.java`：document 服务和 auth 服务之间的内部用户查询。
 - `ErrorAdvice.java`：REST 错误格式。
 - `HealthController.java`：`/healthz` 和 `/readyz`。
 - `MetricsController.java`、`MetricsFilter.java`、`MetricsRegistry.java`：Prometheus 指标。
@@ -371,6 +373,9 @@ Java 后端位于 `apps/backend-java`，主要技术栈：
 - `JWT_SECRET`：JWT 签名密钥，必须显式设置；为空或等于 `change-this-development-secret` 时 Java 应用拒绝启动。
 - `JWT_TTL`：JWT 有效期，默认 `2h`。
 - `BCRYPT_COST`：密码哈希成本，默认 `12`。
+- `APP_SERVICE_ROLE`：Java 服务角色，取值为 `auth`、`document`、`realtime` 或 `all`。
+- `SERVICE_TOKEN`：服务间内部接口共享密钥；auth 角色启动时必须配置，document 调用 auth 内部接口时必须携带。
+- `AUTH_BASE_URL`：document 服务访问 auth 内部接口的基地址，split Compose 默认 `http://backend-java-auth:8080`。
 - `REDIS_HOST`、`REDIS_PORT`、`REDIS_PASSWORD`、`REDIS_TLS`：Redis 连接。
 - `ALLOWED_ORIGINS`：REST CORS 和 WebSocket Origin 白名单。
 - `DB_MAX_OPEN_CONNS`、`DB_MAX_IDLE_CONNS`：Hikari 连接池大小。

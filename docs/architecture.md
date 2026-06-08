@@ -39,6 +39,8 @@ flowchart LR
 - `document` 和 `realtime` 服务共享 `documentation_collab` schema（documents、permissions、updates、snapshots、versions、comments 表），collab 表不再包含对 users 表的外键。
 - `document` 服务通过 Redis 发布 `comment:*` 和 `document:restored` 事件。
 - `realtime` 服务通过 Redis 订阅 `doc:*` 频道，将远端事件广播给本机 WebSocket 连接。
+- split 前端通过 `VITE_AUTH_API_BASE_URL` 访问 auth 服务，通过 `VITE_API_BASE_URL` 访问 document 服务，通过 `VITE_WS_BASE_URL` 访问 realtime 服务；未配置 auth base 时会回退到 `VITE_API_BASE_URL`。
+- `document` 调用 auth 内部用户查询时必须携带 `X-Service-Token`，其值来自 `SERVICE_TOKEN`，并且需要和 auth 服务一致。
 
 Yjs 是协同富文本状态的事实来源。后端负责用户认证、文档授权、MySQL 持久化 Yjs update，以及通过 Redis 做跨实例实时广播。
 

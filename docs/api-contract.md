@@ -75,7 +75,7 @@ REST 和 WebSocket 都以后端校验为准。前端隐藏按钮只用于体验�
 
 ## 内部接口（服务间通信）
 
-以下接口仅在 auth 或 all 服务角色下暴露，通过 `X-Service-Token` 请求头校验调用方身份，校验值由 `SERVICE_TOKEN` 环境变量配置。
+以下接口仅在 auth 或 all 服务角色下暴露，通过 `X-Service-Token` 请求头校验调用方身份，校验值由 `SERVICE_TOKEN` 环境变量配置。auth 角色启动时必须配置 `SERVICE_TOKEN`；all 角色允许不配置，但 `/internal/users/by-email` 和 `/internal/users` 会拒绝所有请求，只有 `/internal/healthz` 仍可无 token 访问。
 
 ### 按邮箱查询用户
 

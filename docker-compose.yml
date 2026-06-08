@@ -81,7 +81,7 @@ services:
       JWT_TTL: ${JWT_TTL:-2h}
       BCRYPT_COST: ${BCRYPT_COST:-12}
       SERVICE_TOKEN: ${SERVICE_TOKEN:-internal-service-token-change-me}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}
+      ALLOWED_ORIGINS: ${SPLIT_ALLOWED_ORIGINS:-http://localhost:15175,http://127.0.0.1:15175}
     depends_on:
       mysql:
         condition: service_healthy
@@ -109,7 +109,7 @@ services:
       JWT_TTL: ${JWT_TTL:-2h}
       AUTH_BASE_URL: ${AUTH_BASE_URL:-http://backend-java-auth:8080}
       SERVICE_TOKEN: ${SERVICE_TOKEN:-internal-service-token-change-me}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}
+      ALLOWED_ORIGINS: ${SPLIT_ALLOWED_ORIGINS:-http://localhost:15175,http://127.0.0.1:15175}
     depends_on:
       mysql:
         condition: service_healthy
@@ -139,7 +139,7 @@ services:
       REDIS_TLS: ${REDIS_TLS:-false}
       JWT_SECRET: ${JWT_SECRET:-local-documentation-secret-please-change}
       JWT_TTL: ${JWT_TTL:-2h}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}
+      ALLOWED_ORIGINS: ${SPLIT_ALLOWED_ORIGINS:-http://localhost:15175,http://127.0.0.1:15175}
     depends_on:
       mysql:
         condition: service_healthy

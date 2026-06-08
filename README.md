@@ -75,6 +75,21 @@ docker compose --profile go up --build backend-go web-go mysql redis
 - Web-Go: `http://localhost:15174`
 - Go API: `http://localhost:18081`
 
+如果要验证 Java 微服务拆分拓扑，启动 split profile：
+
+```powershell
+docker compose --profile split up --build backend-java-auth backend-java-document backend-java-realtime web-split mysql redis
+```
+
+启动后访问：
+
+- Web-Split: `http://localhost:15175`
+- Auth API: `http://localhost:18082`
+- Document API: `http://localhost:18083`
+- Realtime WebSocket: `ws://localhost:18084`
+
+split profile 默认让前端登录和 `/api/me` 请求访问 auth 服务，文档 REST 请求访问 document 服务，WebSocket 连接访问 realtime 服务。`SERVICE_TOKEN` 必须在 auth 和 document 服务之间保持一致；`SPLIT_ALLOWED_ORIGINS` 默认允许 `15175` 前端来源。
+
 常用清理命令：
 
 ```powershell

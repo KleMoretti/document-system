@@ -35,4 +35,4 @@ WebSocket Origin 白名单同样来自 `ALLOWED_ORIGINS`。连接建立后，Jav
 
 - `SERVICE_TOKEN` 环境变量在 auth 和 document 服务之间共享，作为简单的预共享密钥。
 - 内部接口的 CORS 配置独立于 `/api/**`，只允许 `X-Service-Token` 和 `Content-Type` 请求头。
-- 在 `all` 单体模式下，内部接口仍然注册但 token 校验放宽（因为所有数据在同一进程中），不应将 `all` 模式的内部端口暴露到外部网络。
+- 在 `all` 单体模式下，内部接口仍然注册；如果未配置 `SERVICE_TOKEN`，用户查询类内部接口会拒绝所有请求。即使配置了 `SERVICE_TOKEN`，也不应将 `all` 模式的内部端口暴露到外部网络。

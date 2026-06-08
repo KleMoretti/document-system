@@ -42,21 +42,27 @@ docker compose up -d mysql redis
 
 # 启动拆分的三个 Java 服务
 docker compose --profile split up -d backend-java-auth backend-java-document backend-java-realtime
+
+# 启动拆分拓扑对应的前端
+docker compose --profile split up -d web-split
 ```
 
-三个服务的环境变量配置：
+split profile 的默认端口和环境变量配置：
 
 | 服务 | 端口映射 | 数据库 | Redis | 额外配置 |
 |------|---------|--------|-------|---------|
 | backend-java-auth | 18082:8080 | documentation_auth | 不需要 | SERVICE_TOKEN |
 | backend-java-document | 18083:8080 | documentation_collab | publish | AUTH_BASE_URL, SERVICE_TOKEN |
 | backend-java-realtime | 18084:8080 | documentation_collab | subscribe | — |
+| web-split | 15175:80 | — | — | WEB_SPLIT_API_BASE_URL, WEB_SPLIT_AUTH_API_BASE_URL, WEB_SPLIT_WS_BASE_URL |
 
 关键配置项：
 
-- `SERVICE_TOKEN`：内部接口的共享密钥，auth 和 document 服务必须一致。
+- `SERVICE_TOKEN`：内部接口的共享密钥，auth 和 document 服务必须一致；auth 角色未配置时会拒绝启动。
 - `AUTH_BASE_URL`：document 服务访问 auth 内部接口的基地址。
 - `APP_SERVICE_ROLE`：服务角色，取值为 `auth`、`document`、`realtime` 或 `all`（默认）。
+- `SPLIT_ALLOWED_ORIGINS`：split profile 下 auth、document 和 realtime 服务共享的 REST CORS / WebSocket Origin 白名单，默认允许 `http://localhost:15175` 和 `http://127.0.0.1:15175`。
+- `WEB_SPLIT_AUTH_API_BASE_URL`：前端登录、注册和 `/api/me` 请求访问的 auth 服务地址；未设置时前端会回退到 `WEB_SPLIT_API_BASE_URL`。
 
 当前指标包括：
 
