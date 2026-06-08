@@ -1,3 +1,33 @@
+-- =============================================================================
+-- Initialize both databases. In the monolithic (all) deployment a single
+-- documentation_collab database holds every table. In the split deployment
+-- documentation_auth holds only the users table and documentation_collab holds
+-- the remaining collaboration tables with no FK into users.
+-- =============================================================================
+
+CREATE DATABASE IF NOT EXISTS documentation_auth
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+
+CREATE DATABASE IF NOT EXISTS documentation_collab
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+
+-- ── Auth database ────────────────────────────────────────────────────────────
+
+USE documentation_auth;
+
+CREATE TABLE IF NOT EXISTS users (
+  id VARCHAR(36) PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  display_name VARCHAR(120) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- ── Collab database (also used by the monolithic all mode) ───────────────────
+
+USE documentation_collab;
+
+-- users is duplicated here so the monolithic all role can JOIN on it directly.
 CREATE TABLE IF NOT EXISTS users (
   id VARCHAR(36) PRIMARY KEY,
   email VARCHAR(255) NOT NULL UNIQUE,
@@ -12,8 +42,7 @@ CREATE TABLE IF NOT EXISTS documents (
   owner_id VARCHAR(36) NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP NULL,
-  CONSTRAINT fk_documents_owner FOREIGN KEY (owner_id) REFERENCES users(id)
+  deleted_at TIMESTAMP NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS document_permissions (
@@ -22,8 +51,7 @@ CREATE TABLE IF NOT EXISTS document_permissions (
   role ENUM('owner', 'editor', 'viewer') NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (document_id, user_id),
-  CONSTRAINT fk_permissions_document FOREIGN KEY (document_id) REFERENCES documents(id),
-  CONSTRAINT fk_permissions_user FOREIGN KEY (user_id) REFERENCES users(id)
+  CONSTRAINT fk_permissions_document FOREIGN KEY (document_id) REFERENCES documents(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS document_sequences (
@@ -61,8 +89,7 @@ CREATE TABLE IF NOT EXISTS document_versions (
   created_by VARCHAR(36) NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_document_versions_document (document_id, created_at),
-  CONSTRAINT fk_versions_document FOREIGN KEY (document_id) REFERENCES documents(id),
-  CONSTRAINT fk_versions_user FOREIGN KEY (created_by) REFERENCES users(id)
+  CONSTRAINT fk_versions_document FOREIGN KEY (document_id) REFERENCES documents(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS document_comments (
@@ -74,8 +101,7 @@ CREATE TABLE IF NOT EXISTS document_comments (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_comments_document (document_id, created_at),
-  CONSTRAINT fk_comments_document FOREIGN KEY (document_id) REFERENCES documents(id),
-  CONSTRAINT fk_comments_author FOREIGN KEY (author_id) REFERENCES users(id)
+  CONSTRAINT fk_comments_document FOREIGN KEY (document_id) REFERENCES documents(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS document_comment_replies (
@@ -85,6 +111,5 @@ CREATE TABLE IF NOT EXISTS document_comment_replies (
   body TEXT NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_comment_replies_comment (comment_id, created_at),
-  CONSTRAINT fk_comment_replies_comment FOREIGN KEY (comment_id) REFERENCES document_comments(id),
-  CONSTRAINT fk_comment_replies_author FOREIGN KEY (author_id) REFERENCES users(id)
+  CONSTRAINT fk_comment_replies_comment FOREIGN KEY (comment_id) REFERENCES document_comments(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

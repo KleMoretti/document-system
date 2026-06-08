@@ -15,8 +15,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
+@ConditionalOnRole({ServiceRole.REALTIME, ServiceRole.ALL})
 class UpdateBatcher {
-  private final AppRepository repository;
+  private final RealtimeRepository repository;
   private final MetricsRegistry metrics;
   private final Duration flushAge;
   private final int maxSize;
@@ -25,14 +26,14 @@ class UpdateBatcher {
 
   @Autowired
   UpdateBatcher(
-      AppRepository repository,
+      RealtimeRepository repository,
       MetricsRegistry metrics,
       @Value("${app.ws-batch-flush-ms:25}") long flushMs,
       @Value("${app.ws-batch-max-size:32}") int maxSize) {
     this(repository, metrics, Duration.ofMillis(flushMs), maxSize);
   }
 
-  UpdateBatcher(AppRepository repository, MetricsRegistry metrics, Duration flushAge, int maxSize) {
+  UpdateBatcher(RealtimeRepository repository, MetricsRegistry metrics, Duration flushAge, int maxSize) {
     this.repository = repository;
     this.metrics = metrics;
     this.flushAge = flushAge.isNegative() || flushAge.isZero() ? Duration.ofMillis(25) : flushAge;

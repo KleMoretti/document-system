@@ -4,7 +4,7 @@
 
 ## 1. 总体定位
 
-本仓库是一套在线文档协同编辑系统。前端只有一套实现，通过共享 REST 与 WebSocket 契约连接 Java 或 Go 后端；Java 后端是其中一套 Spring Boot 实现，必须与 Go 后端保持相同产品语义。
+本仓库是一套在线文档协同编辑系统。本文只说明当前前端连接 Java Spring Boot 后端时的实现细节；认证、权限、WebSocket 同步、压测和并发说明均以 `apps/backend-java` 当前代码为准。
 
 核心事实来源：
 
@@ -27,7 +27,7 @@ flowchart LR
 
 关键约束：
 
-- 前端不能写死 Java 私有行为，只能依赖共享契约。
+- 前端通过 `VITE_API_BASE_URL` 和 `VITE_WS_BASE_URL` 指向 Java 后端，不在业务代码里写死本机地址。
 - 后端不理解 Markdown、HTML、TXT 或 PDF 语义，只持久化协同编辑的 Yjs 状态。
 - 文档内容的实时状态以 Yjs update 为中心，MySQL 中保存增量、快照和版本。
 - 评论通过 REST 落库，WebSocket 评论事件只是活动客户端的刷新提示。
@@ -64,19 +64,17 @@ flowchart LR
 仓库中已有模式文件：
 
 - `apps/web/.env.java`：连接 Java 后端 `8080`。
-- `apps/web/.env.go`：连接 Go 后端 `8081`。
 
 本地常用启动方式：
 
 ```powershell
 npm --prefix apps/web run dev -- --mode java
-npm --prefix apps/web run dev -- --mode go
 ```
 
 维护注意点：
 
-- 新增环境时优先通过 `.env.local` 或 Vite mode 配置，不要在业务代码里判断 Java 或 Go。
-- 前端 API 层只应调用共享契约中的路径和字段。
+- 新增环境时优先通过 `.env.local` 或 Vite mode 配置，不要在业务代码里写死部署地址。
+- 前端 API 层应按 Java 当前 REST 响应字段维护类型定义。
 
 ### 2.3 API 调用层
 
@@ -120,8 +118,7 @@ REST 调用集中在 `apps/web/src/api.ts`。
 
 维护规则：
 
-- 如果 Java 后端新增、删除或改名响应字段，必须先更新共享契约，再同步前端类型。
-- Go 后端也必须保持相同字段语义。
+- 如果 Java 后端新增、删除或改名响应字段，必须同步前端类型、API 调用层和对应文档。
 
 ### 2.5 主应用状态与页面布局
 
@@ -270,7 +267,8 @@ new WebSocket(`${WS_BASE}/ws/documents/${docId}`, ['bearer', token])
 - 监听 `ydoc.on('update')`。
 - `origin === 'remote'` 时不回发。
 - socket 未连接或只读时不发送。
-- 其他本地更新编码为 Base64 后发送 `sync:update`。
+- 其他本地更新先进入本地批量队列，35 ms 窗口内用 `Y.mergeUpdates` 合并，再编码为 Base64 后发送 `sync:update`。
+- 如果 WebSocket 发送缓冲超过 1 MiB，关键 `sync:update` 保留在本地队列中，并每 50 ms 重试；非关键实时消息会跳过发送。
 
 远端消息：
 
@@ -370,11 +368,13 @@ Java 后端位于 `apps/backend-java`，主要技术栈：
 
 - `JAVA_HTTP_PORT`：服务端口，默认 `8080`。
 - `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD`：MySQL 连接。
-- `JWT_SECRET`：JWT 签名密钥，必须显式设置，且不能是默认不安全值。
+- `JWT_SECRET`：JWT 签名密钥，必须显式设置；为空或等于 `change-this-development-secret` 时 Java 应用拒绝启动。
 - `JWT_TTL`：JWT 有效期，默认 `2h`。
 - `BCRYPT_COST`：密码哈希成本，默认 `12`。
 - `REDIS_HOST`、`REDIS_PORT`、`REDIS_PASSWORD`、`REDIS_TLS`：Redis 连接。
 - `ALLOWED_ORIGINS`：REST CORS 和 WebSocket Origin 白名单。
+- `DB_MAX_OPEN_CONNS`、`DB_MAX_IDLE_CONNS`：Hikari 连接池大小。
+- `WS_SEND_QUEUE_SIZE`、`WS_BATCH_MAX_SIZE`、`WS_BATCH_FLUSH_MS`、`WS_SNAPSHOT_MIN_UPDATES`：WebSocket 出站队列、批量落库和快照阈值。
 
 `Application.java` 中创建的 Bean：
 
@@ -382,6 +382,7 @@ Java 后端位于 `apps/backend-java`，主要技术栈：
 - `JwtManager`：校验 `JWT_SECRET` 后构造。
 - `JedisPooled`：支持 Redis 密码和 TLS。
 - `WebMvcConfigurer`：只对 `/api/**` 配置 CORS，允许 `GET`、`POST`、`PATCH`、`DELETE`、`OPTIONS`。
+- `WebSocketConfig`：把 `DocumentSocketHandler` 注册到 `/ws/documents/{docId}`，并使用同一组 `ALLOWED_ORIGINS` 做 Origin 白名单。
 
 ### 3.3 数据库表设计
 
@@ -420,7 +421,7 @@ Java 后端所有持久化入口都在 `AppRepository.java`，业务层不直接
 注意：
 
 - record 字段名会直接影响 JSON 字段名。
-- 与前端 `types.ts`、OpenAPI schema 和 Go 后端模型必须保持一致。
+- 与前端 `types.ts` 和文档中的 REST 说明保持一致。
 
 ### 3.5 认证与授权
 
@@ -450,6 +451,7 @@ JWT：
 - `JwtManager` 手写 HS256 JWT。
 - payload 包含 `sub`、`email`、`exp`。
 - 校验签名和过期时间。
+- token 格式不合法、签名不匹配或已过期时，REST 统一转为 `UNAUTHORIZED`。
 
 角色能力：
 
@@ -624,8 +626,9 @@ WebSocket 路由由 `WebSocketConfig.java` 注册：
 - 只有 owner/editor 可发送。
 - update 是 Base64 编码。
 - 解码后大小不能超过 `MAX_UPDATE_BYTES`，当前为 1 MB。
-- 调用 `AppRepository.appendUpdate()` 持久化。
-- 广播给本实例同文档 session，并通过 Redis 广播给其他实例。
+- 调用 `UpdateBatcher.append()` 进入按文档聚合队列；默认达到 32 条或等待 25 ms 后调用 `AppRepository.appendUpdates()` 批量持久化。
+- `append()` 返回的 future 完成后才广播；持久化失败返回 `DATABASE_ERROR`，不会广播。
+- 广播给本实例同文档 session，并通过 Redis 发布到 `doc:<docId>`。
 
 处理 `presence:update`：
 
@@ -637,6 +640,7 @@ WebSocket 路由由 `WebSocketConfig.java` 注册：
 - 只有 owner/editor 可发送。
 - snapshot 同样限制 1 MB。
 - `snapshotSeq` 必须为正数。
+- `snapshotSeq` 必须等于当前快照序号加当前未压缩增量数，并且未压缩增量数达到后端阈值，默认 100。
 - `AppRepository.saveSnapshot()` 保存快照，并删除 `seq <= snapshotSeq` 的旧增量。
 
 错误消息：
@@ -651,18 +655,21 @@ WebSocket 路由由 `WebSocketConfig.java` 注册：
 
 ### 3.11 Yjs 增量、快照和锁
 
-文档内容状态由 `AppRepository` 中三组方法维护：
+文档内容状态由 `AppRepository` 中几组方法维护：
 
-- `appendUpdate(docId, update)`
+- `appendUpdates(docId, updates)`：当前 `UpdateBatcher` 使用的批量追加入口。
+- `appendUpdate(docId, update)`：单条追加包装方法，内部调用 `appendUpdates()`。
 - `loadDocumentState(docId)`
 - `saveSnapshot(docId, lastSeq, snapshot)`
 
 追加 update：
 
 1. `lockDocument(docId)` 使用 `SELECT ... FOR UPDATE` 锁定文档行。
-2. 计算新 seq：取 `document_updates` 最大 seq 和 `document_snapshots` 最大 last_seq 的较大值再加 1。
-3. 插入 `document_updates`。
-4. 更新 `documents.updated_at`。
+2. 确保 `document_sequences` 中存在该文档的序号记录。首次写入时，初始值取 `document_updates` 最大 seq 和 `document_snapshots` 最大 last_seq 的较大值再加 1。
+3. `SELECT next_seq FROM document_sequences ... FOR UPDATE` 锁定序号行，得到本批次起始 seq。
+4. 批量插入 `document_updates`，为本批次分配连续 seq。
+5. 将 `document_sequences.next_seq` 推进本批次大小。
+6. 按 5 秒窗口刷新 `documents.updated_at`，减少热点文档写放大。
 
 读取状态：
 
@@ -703,7 +710,23 @@ WebSocket 路由由 `WebSocketConfig.java` 注册：
 - Redis 发布或订阅失败只记录 warning，不直接中断 REST 或 WebSocket 主流程。
 - 这意味着单实例本地广播仍然可用，但多实例同步会受影响。
 
-### 3.13 错误格式
+### 3.13 WebSocket 出站队列和慢客户端
+
+`OutboundWebSocketClient.java` 为每个已建立连接维护一个 `ArrayBlockingQueue<TextMessage>`，队列大小由 `WS_SEND_QUEUE_SIZE` 控制，默认 32。
+
+写出策略：
+
+- `DocumentSocketHandler.broadcastLocal()` 只负责把序列化后的消息 `enqueue()` 到每个连接的队列。
+- 每个连接启动一个虚拟线程 writer，从队列中 `take()` 消息并调用 `session.sendMessage()`。
+- `send()` 使用 `writeLock` 串行化同一 `WebSocketSession` 的写出，避免 Tomcat WebSocket session 并发写入。
+
+慢客户端策略：
+
+- 队列满时 `enqueue()` 返回失败，并调用 `closeSlowClient()`。
+- 后端记录 `documentation_collab_ws_errors_total{code="SLOW_CLIENT"}` 和 `documentation_collab_ws_slow_clients_total`。
+- 后端尽量发送 `SLOW_CLIENT` 错误消息，然后用 `CloseStatus.SESSION_NOT_RELIABLE` 关闭连接。
+
+### 3.14 错误格式
 
 REST 错误由 `ErrorAdvice.java` 统一返回 `ApiError`：
 
@@ -727,12 +750,13 @@ REST 错误由 `ErrorAdvice.java` 统一返回 `ApiError`：
 - WebSocket 错误不走 `ErrorAdvice`，而是在 socket 内发送 `type=error` 消息。
 - 前端 `api.ts` 目前主要展示 `message`，不会根据 `code` 做复杂分支。
 
-### 3.14 健康检查与指标
+### 3.15 健康检查与指标
 
 健康检查：
 
 - `GET /healthz`：只证明进程存活，返回 `{ "status": "ok" }`。
 - `GET /readyz`：调用 `repository.ping()` 查询 MySQL，失败返回 HTTP 503。
+- `/readyz` 成功返回 `{ "status": "ready" }`，失败返回 `{ "status": "not_ready" }`。
 
 指标：
 
@@ -746,12 +770,39 @@ REST 错误由 `ErrorAdvice.java` 统一返回 `ApiError`：
 - `documentation_collab_ws_connections_total`
 - `documentation_collab_ws_connections_active`
 - `documentation_collab_ws_messages_total{type}`
+- `documentation_collab_ws_errors_total{code}`
+- `documentation_collab_ws_message_bytes_total`
+- `documentation_collab_ws_slow_clients_total`
+- `documentation_collab_ws_send_queue_depth_max`
+- `documentation_collab_ws_broadcast_duration_ms_count|sum|max`
+- `documentation_collab_ws_persist_duration_ms_count|sum|max`
+- `documentation_collab_ws_batch_size_count|sum|max`
 
 `MetricsRegistry.normalizePath()` 会把路径中的 UUID 替换为 `{docId}`，减少指标基数。
 
-## 4. 端到端业务链路
+## 4. 压测和并发验证
 
-### 4.1 登录到加载文档
+WebSocket 压测工具位于 `apps/backend-go/cmd/ws-loadtest`，但可直接压测 Java 后端地址。常用命令：
+
+```powershell
+npm run loadtest:ws -- -url ws://localhost:18080/ws/documents -doc-id <uuid> -token <jwt> -clients 100 -duration 30s -interval 1s -mode presence
+npm run loadtest:ws -- -url ws://localhost:18080/ws/documents -doc-id <uuid> -token <jwt> -clients 100 -duration 30s -interval 1s -mode update
+```
+
+压测结果重点看：
+
+- `connected` 是否等于 `clients`。
+- `errors`、`disconnects`、`error_codes` 是否出现异常。
+- `receive_latency_p95` 是否随着客户端数上升明显恶化。
+- Java `/metrics` 中 `documentation_collab_ws_send_queue_depth_max` 是否接近 `WS_SEND_QUEUE_SIZE`。
+- `documentation_collab_ws_slow_clients_total` 是否增加。
+- `documentation_collab_ws_batch_size_count|sum|max` 是否符合 update 模式下的批量落库预期。
+
+`presence` 模式主要压广播扇出和出站队列；`update` 模式会走完整的权限校验、Yjs update 大小校验、`UpdateBatcher`、MySQL 批量落库和广播路径。
+
+## 5. 端到端业务链路
+
+### 5.1 登录到加载文档
 
 ```mermaid
 sequenceDiagram
@@ -769,7 +820,7 @@ sequenceDiagram
   Java-->>Web: DocumentSummary[]
 ```
 
-### 4.2 创建文档并开始协同编辑
+### 5.2 创建文档并开始协同编辑
 
 ```mermaid
 sequenceDiagram
@@ -788,7 +839,7 @@ sequenceDiagram
   Java-->>Editor: sync:init
 ```
 
-### 4.3 导入文件到新文档
+### 5.3 导入文件到新文档
 
 1. 前端读取本地文件。
 2. 根据扩展名判断 Markdown、HTML 或 TXT。
@@ -799,9 +850,9 @@ sequenceDiagram
 7. 编辑器收到空文档 `sync:init` 后执行 `editor.commands.setContent(html)`。
 8. Tiptap/Yjs 产生本地 update。
 9. 前端通过 WebSocket 发送 `sync:update`。
-10. Java 后端写入 `document_updates`。
+10. Java 后端通过 `UpdateBatcher` 批量写入 `document_updates`。
 
-### 4.4 实时编辑与广播
+### 5.4 实时编辑与广播
 
 ```mermaid
 sequenceDiagram
@@ -813,14 +864,15 @@ sequenceDiagram
   participant B as 用户 B 前端
 
   A->>Java1: sync:update Base64(Yjs update)
-  Java1->>DB: appendUpdate(docId, update)
+  Java1->>Java1: UpdateBatcher.append(docId, update)
+  Java1->>DB: appendUpdates(docId, batch)
   Java1-->>A: broadcast sync:update
   Java1->>Redis: publish doc:{docId}
   Redis-->>Java2: message
   Java2-->>B: broadcast sync:update
 ```
 
-### 4.5 保存与恢复版本
+### 5.5 保存与恢复版本
 
 保存版本：
 
@@ -836,7 +888,7 @@ sequenceDiagram
 4. Java 广播 `document:restored`。
 5. 活动前端刷新页面并重新打开文档。
 
-### 4.6 评论写入与通知
+### 5.6 评论写入与通知
 
 1. 前端通过 REST 创建或更新评论。
 2. Java 写入 MySQL。
@@ -844,7 +896,7 @@ sequenceDiagram
 4. 前端当前实现会在 REST mutation 后主动重新拉取评论列表。
 5. 后续如果要实时刷新其他客户端，可在收到 `comment:*` 时调用 `api.listComments`。
 
-## 5. 测试覆盖
+## 6. 测试覆盖
 
 前端测试：
 
@@ -872,13 +924,7 @@ npm run build:web
 npm run test:java
 ```
 
-如果改动共享契约或跨端行为，还需要补跑 Go 后端测试：
-
-```powershell
-npm run test:go
-```
-
-## 6. 维护边界与变更建议
+## 7. 维护边界与变更建议
 
 修改前端时：
 
@@ -889,8 +935,8 @@ npm run test:go
 
 修改 Java 后端时：
 
-- 权限、角色、错误码、REST 字段、WebSocket 消息变更必须同步共享契约。
-- `Models.java` 的 record 字段名就是 JSON 字段名，改名影响前端和 Go。
+- 权限、角色、错误码、REST 字段、WebSocket 消息变更必须同步 Java 文档和前端类型。
+- `Models.java` 的 record 字段名就是 JSON 字段名，改名会影响前端。
 - `AppRepository` 中涉及 schema 的 SQL 变更必须同步 `schema.mysql.sql`。
 - WebSocket 写路径要继续保护 viewer 只读语义。
 - Yjs update 和 snapshot 都必须保持 Base64 文本协议，二进制只在服务端和数据库内部存在。
@@ -910,10 +956,10 @@ npm run test:go
 
 修改运维接口时：
 
-- `/healthz`、`/readyz`、`/metrics` 的 Java 和 Go 语义必须一致。
+- `/healthz`、`/readyz`、`/metrics` 的说明必须和 Java 控制器、过滤器、指标注册表保持一致。
 - 指标路径要注意基数，动态 UUID 应归一化。
 
-## 7. 快速定位表
+## 8. 快速定位表
 
 | 需求 | 前端入口 | Java 后端入口 | 契约 |
 | --- | --- | --- | --- |

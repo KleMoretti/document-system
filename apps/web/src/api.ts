@@ -8,7 +8,7 @@ import type {
   Share,
   User
 } from './types';
-import { API_BASE } from './config';
+import { API_BASE, AUTH_API_BASE } from './config';
 
 export function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
@@ -19,7 +19,8 @@ export function tokenHeader(token: string | null): Record<string, string> {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(joinUrl(API_BASE, path), {
+  const base = path.startsWith('/api/auth') || path === '/api/me' ? AUTH_API_BASE : API_BASE;
+  const response = await fetch(joinUrl(base, path), {
     ...options,
     headers: {
       'Content-Type': 'application/json',

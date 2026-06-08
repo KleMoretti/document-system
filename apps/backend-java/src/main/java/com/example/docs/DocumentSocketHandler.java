@@ -23,12 +23,13 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 @Component
+@ConditionalOnRole({ServiceRole.REALTIME, ServiceRole.ALL})
 public class DocumentSocketHandler extends TextWebSocketHandler implements SubProtocolCapable {
   private static final Logger log = LoggerFactory.getLogger(DocumentSocketHandler.class);
   static final int MAX_UPDATE_BYTES = 1024 * 1024;
   private static final Pattern UUID_PATTERN =
       Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
-  private final AppRepository repository;
+  private final RealtimeRepository repository;
   private final JwtManager jwtManager;
   private final RedisBus redisBus;
   private final MetricsRegistry metrics;
@@ -39,13 +40,13 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
   private final Map<String, Set<OutboundWebSocketClient>> sessions = new ConcurrentHashMap<>();
   private final Map<String, OutboundWebSocketClient> clientsBySession = new ConcurrentHashMap<>();
 
-  public DocumentSocketHandler(AppRepository repository, JwtManager jwtManager, RedisBus redisBus, MetricsRegistry metrics) {
+  public DocumentSocketHandler(RealtimeRepository repository, JwtManager jwtManager, RedisBus redisBus, MetricsRegistry metrics) {
     this(repository, jwtManager, redisBus, metrics, new UpdateBatcher(repository, metrics, 25, 32), 32, 100);
   }
 
   @Autowired
   public DocumentSocketHandler(
-      AppRepository repository,
+      RealtimeRepository repository,
       JwtManager jwtManager,
       RedisBus redisBus,
       MetricsRegistry metrics,
@@ -197,29 +198,6 @@ public class DocumentSocketHandler extends TextWebSocketHandler implements SubPr
     var text = mapper.writeValueAsString(body);
     broadcastLocal(docId, text);
     redisBus.publish(docId, body);
-  }
-
-  public void broadcastCommentEvent(String docId, String type, CommentThread comment) {
-    try {
-      var outgoing =
-          mapper.createObjectNode()
-              .put("type", type)
-              .put("docId", docId)
-              .put("commentId", comment.id())
-              .set("comment", mapper.valueToTree(comment));
-      broadcast(docId, outgoing);
-    } catch (Exception ignored) {
-      log.warn("Comment websocket event broadcast failed for document {}", docId, ignored);
-    }
-  }
-
-  public void broadcastDocumentRestored(String docId) {
-    try {
-      var outgoing = mapper.createObjectNode().put("type", "document:restored").put("docId", docId);
-      broadcast(docId, outgoing);
-    } catch (Exception ex) {
-      log.warn("Document restored websocket event broadcast failed for document {}", docId, ex);
-    }
   }
 
   private void broadcastRemote(String docId, JsonNode body) {

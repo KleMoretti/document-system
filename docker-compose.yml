@@ -30,6 +30,8 @@ services:
       timeout: 5s
       retries: 10
 
+  # ── monolithic (ALL role) — backward compatible ──────────────────────
+
   backend-java:
     build:
       context: .
@@ -37,6 +39,7 @@ services:
     container_name: documentation-collab-backend-java
     environment:
       JAVA_HTTP_PORT: 8080
+      APP_SERVICE_ROLE: all
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_DATABASE: ${MYSQL_DATABASE:-documentation_collab}
@@ -48,6 +51,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-local-documentation-secret-please-change}
       JWT_TTL: ${JWT_TTL:-2h}
       BCRYPT_COST: ${BCRYPT_COST:-12}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-internal-service-token-change-me}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}
     depends_on:
       mysql:
@@ -56,6 +60,95 @@ services:
         condition: service_healthy
     ports:
       - "${JAVA_HOST_PORT:-18080}:8080"
+
+  # ── split services (profile: split) ──────────────────────────────────
+
+  backend-java-auth:
+    profiles: ["split"]
+    build:
+      context: .
+      dockerfile: apps/backend-java/Dockerfile
+    container_name: documentation-collab-backend-java-auth
+    environment:
+      JAVA_HTTP_PORT: 8080
+      APP_SERVICE_ROLE: auth
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_AUTH_DATABASE:-documentation_auth}
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      JWT_SECRET: ${JWT_SECRET:-local-documentation-secret-please-change}
+      JWT_TTL: ${JWT_TTL:-2h}
+      BCRYPT_COST: ${BCRYPT_COST:-12}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-internal-service-token-change-me}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "${AUTH_HOST_PORT:-18082}:8080"
+
+  backend-java-document:
+    profiles: ["split"]
+    build:
+      context: .
+      dockerfile: apps/backend-java/Dockerfile
+    container_name: documentation-collab-backend-java-document
+    environment:
+      JAVA_HTTP_PORT: 8080
+      APP_SERVICE_ROLE: document
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_COLLAB_DATABASE:-documentation_collab}
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_TLS: ${REDIS_TLS:-false}
+      JWT_SECRET: ${JWT_SECRET:-local-documentation-secret-please-change}
+      JWT_TTL: ${JWT_TTL:-2h}
+      AUTH_BASE_URL: ${AUTH_BASE_URL:-http://backend-java-auth:8080}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-internal-service-token-change-me}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-java-auth:
+        condition: service_started
+    ports:
+      - "${DOCUMENT_HOST_PORT:-18083}:8080"
+
+  backend-java-realtime:
+    profiles: ["split"]
+    build:
+      context: .
+      dockerfile: apps/backend-java/Dockerfile
+    container_name: documentation-collab-backend-java-realtime
+    environment:
+      JAVA_HTTP_PORT: 8080
+      APP_SERVICE_ROLE: realtime
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_COLLAB_DATABASE:-documentation_collab}
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_TLS: ${REDIS_TLS:-false}
+      JWT_SECRET: ${JWT_SECRET:-local-documentation-secret-please-change}
+      JWT_TTL: ${JWT_TTL:-2h}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:15173,http://127.0.0.1:15173}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${REALTIME_HOST_PORT:-18084}:8080"
+
+  # ── Go backend (profile: go) ─────────────────────────────────────────
 
   backend-go:
     profiles: ["go"]
@@ -85,6 +178,8 @@ services:
     ports:
       - "${GO_HOST_PORT:-18081}:8081"
 
+  # ── web frontends ────────────────────────────────────────────────────
+
   web:
     build:
       context: .
@@ -97,6 +192,22 @@ services:
       - backend-java
     ports:
       - "${WEB_PORT:-15173}:80"
+
+  web-split:
+    profiles: ["split"]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${WEB_SPLIT_API_BASE_URL:-http://localhost:18083}
+        VITE_AUTH_API_BASE_URL: ${WEB_SPLIT_AUTH_API_BASE_URL:-http://localhost:18082}
+        VITE_WS_BASE_URL: ${WEB_SPLIT_WS_BASE_URL:-ws://localhost:18084}
+    container_name: documentation-collab-web-split
+    depends_on:
+      - backend-java-document
+      - backend-java-realtime
+    ports:
+      - "${WEB_SPLIT_PORT:-15175}:80"
 
   web-go:
     profiles: ["go"]

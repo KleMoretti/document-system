@@ -31,7 +31,7 @@ class DocumentSocketHandlerTest {
     var redisBus = mock(RedisBus.class);
     var handler =
         new DocumentSocketHandler(
-            mock(AppRepository.class),
+            mock(RealtimeRepository.class),
             new JwtManager("test-secret", Duration.ofHours(1)),
             redisBus,
             new MetricsRegistry());
@@ -52,7 +52,7 @@ class DocumentSocketHandlerTest {
     var redisBus = mock(RedisBus.class);
     var handler =
         new DocumentSocketHandler(
-            mock(AppRepository.class),
+            mock(RealtimeRepository.class),
             new JwtManager("test-secret", Duration.ofHours(1)),
             redisBus,
             new MetricsRegistry());
@@ -69,7 +69,7 @@ class DocumentSocketHandlerTest {
 
   @Test
   void oversizedUpdateSendsErrorAndDoesNotPersist() throws Exception {
-    var repository = mock(AppRepository.class);
+    var repository = mock(RealtimeRepository.class);
     var handler =
         new DocumentSocketHandler(
             repository,
@@ -96,8 +96,34 @@ class DocumentSocketHandlerTest {
   }
 
   @Test
+  void viewerCannotSendSyncUpdate() throws Exception {
+    var repository = mock(RealtimeRepository.class);
+    var handler =
+        new DocumentSocketHandler(
+            repository,
+            new JwtManager("test-secret", Duration.ofHours(1)),
+            mock(RedisBus.class),
+            new MetricsRegistry());
+    var session = mock(WebSocketSession.class);
+    var attributes = new HashMap<String, Object>();
+    attributes.put("docId", "11111111-1111-4111-8111-111111111111");
+    attributes.put("userId", "user-2");
+    attributes.put("role", "viewer");
+    when(session.getAttributes()).thenReturn(attributes);
+    when(session.isOpen()).thenReturn(true);
+
+    handler.handleTextMessage(
+        session,
+        new TextMessage(
+            "{\"type\":\"sync:update\",\"update\":\"dGVzdA==\"}".getBytes(StandardCharsets.UTF_8)));
+
+    verify(repository, never()).appendUpdate(any(), any());
+    verify(session).sendMessage(any(TextMessage.class));
+  }
+
+  @Test
   void snapshotMessagePersistsSnapshotForEditors() throws Exception {
-    var repository = mock(AppRepository.class);
+    var repository = mock(RealtimeRepository.class);
     var handler =
         new DocumentSocketHandler(
             repository,

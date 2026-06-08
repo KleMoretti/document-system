@@ -41,9 +41,9 @@
 
 学习目标：
 
-- 理解 monorepo 结构：`apps/web`、`apps/backend-java`、`apps/backend-go`、`packages/shared-contract`、`docs`。
-- 理解前端后端无关原则：前端只依赖共享 REST 和 WebSocket 契约，不写死 Java 或 Go 私有行为。
-- 能画出系统架构图：React/Yjs 前端、Java/Go 后端、MySQL、Redis。
+- 理解 monorepo 中当前 Java 栈相关结构：`apps/web`、`apps/backend-java`、`packages/shared-contract`、`docs`。
+- 理解前后端契约边界：前端只依赖 REST 和 WebSocket 契约，不依赖 Java 后端内部实现细节。
+- 能画出系统架构图：React/Yjs 前端、Java Spring Boot 后端、MySQL、Redis。
 
 重点文件：
 
@@ -56,14 +56,14 @@
 简历可写：
 
 ```text
-负责梳理并实现在线文档协作系统的前后端分层架构，前端通过统一 REST/WebSocket 契约同时适配 Java 与 Go 后端实现，保证业务语义一致和后端可切换。
+负责梳理并实现在线文档协作系统的前后端分层架构，前端通过 REST/WebSocket 契约连接 Java Spring Boot 后端，保证接口字段、权限语义和实时消息行为一致。
 ```
 
 面试要能回答：
 
-- 为什么前端要保持后端无关？
-- 共享契约在多人协作中解决了什么问题？
-- Java 和 Go 两套后端如何避免接口语义分叉？
+- 为什么前端不能依赖后端内部实现细节？
+- 契约在多人协作和前后端联调中解决了什么问题？
+- Java 后端、前端类型和文档如何避免接口语义分叉？
 
 ### 阶段二：Java Spring Boot REST API
 
@@ -89,7 +89,7 @@
 简历可写：
 
 ```text
-基于 Spring Boot 3 实现用户认证、文档管理、分享权限、版本管理和评论协作等 REST API，统一错误响应格式，保证前端和多语言后端实现对齐。
+基于 Spring Boot 3 实现用户认证、文档管理、分享权限、版本管理和评论协作等 REST API，统一错误响应格式，保证 Java 后端实现、接口文档和前端调用对齐。
 ```
 
 ### 阶段三：JWT、密码安全和 RBAC 权限
@@ -98,7 +98,7 @@
 
 - 理解 BCrypt 密码哈希和明文密码不落库原则。
 - 理解 JWT 的 header、payload、signature、exp 过期时间。
-- 掌握 Bearer Token 接口鉴权。
+- 掌握 Bearer 令牌接口鉴权。
 - 掌握 owner、editor、viewer 权限边界。
 
 重点文件：
@@ -146,6 +146,7 @@
 - `users`：用户身份。
 - `documents`：文档元数据，包含 `deleted_at` 软删除字段。
 - `document_permissions`：文档和用户的角色关系。
+- `document_sequences`：按文档记录下一次可用 seq，支撑批量写入时连续分配序号。
 - `document_updates`：按 `seq` 保存 Yjs 增量更新。
 - `document_versions`：保存某一时刻的更新序列快照。
 - `document_comments`、`document_comment_replies`：评论和回复。
@@ -153,7 +154,7 @@
 简历可写：
 
 ```text
-设计 MySQL 文档协作数据模型，使用 document_updates 按序保存 Yjs 增量更新，并通过事务和行锁保证并发写入时序列号递增一致。
+设计 MySQL 文档协作数据模型，使用 document_updates 按序保存 Yjs 增量更新，并通过 document_sequences、事务和行锁保证并发写入时序列号递增一致。
 ```
 
 面试要能回答：
@@ -171,7 +172,7 @@
 - 理解 `sync:init`、`sync:update`、`presence:update`、`error` 消息。
 - 理解 Yjs update 是协同状态的增量，不是普通文本内容。
 - 掌握 Base64 传输二进制 update 的原因。
-- 理解只读用户、非法文档 ID、无效 token 的拒绝逻辑。
+- 理解只读用户、非法文档 ID、无效令牌的拒绝逻辑。
 
 重点文件：
 
@@ -344,18 +345,18 @@ npm run test:java
 - 第 6 天：形成完整项目 STAR 表达。
 - 第 7 天：根据问答文档做一轮模拟面试。
 
-## 5. 简历项目 Bullet 模板
+## 5. 简历项目要点模板
 
 可根据实际掌握程度选择 4 到 6 条：
 
 ```text
 - 负责在线文档协同编辑系统核心后端开发，基于 Java 21、Spring Boot 3、JdbcTemplate、MySQL、Redis 和 WebSocket 实现文档协作能力。
 - 设计 owner/editor/viewer 三级 RBAC 权限模型，覆盖文档读写、分享、软删除、恢复、版本恢复和 WebSocket 编辑权限。
-- 实现 Yjs 增量更新持久化方案，将协同编辑 update 按 document_id + seq 追加写入 MySQL，并通过事务和行锁保证并发写入顺序。
+- 实现 Yjs 增量更新持久化方案，将协同编辑 update 按 document_id + seq 批量追加写入 MySQL，并通过 document_sequences、事务和行锁保证并发写入顺序。
 - 实现 WebSocket 实时同步通道，支持连接鉴权、历史 update 初始化、编辑增量广播、在线状态同步和错误消息标准化。
 - 使用 Redis Pub/Sub 实现多实例 WebSocket 消息广播，结合 MySQL 作为最终状态来源，支持客户端断线重连后的状态恢复。
 - 基于 React + TypeScript + Tiptap + Yjs 实现协同富文本编辑前端，支持只读模式、自动重连、在线状态、导入导出和前端模板初始化。
-- 建立共享 REST/WebSocket/SQL 契约，保证 Java 与 Go 后端实现对外接口和业务语义一致。
+- 维护 REST/WebSocket/SQL 契约，保证 Java 后端、前端类型和文档中的接口与业务语义一致。
 - 补充认证、权限、WebSocket、指标和前端格式转换测试，并使用 Docker Compose 编排 Web、Java API、MySQL、Redis 本地环境。
 ```
 
@@ -369,5 +370,5 @@ npm run test:java
 - Java 后端如何保证权限和数据一致性。
 - WebSocket 如何鉴权、初始化、广播和处理错误。
 - MySQL、Redis 在系统里的边界分别是什么。
-- 如何保证 Java 和 Go 后端契约一致。
+- 如何保证 Java 后端、前端类型和契约文档一致。
 - 如果用户量增加，系统瓶颈在哪里，怎么优化。

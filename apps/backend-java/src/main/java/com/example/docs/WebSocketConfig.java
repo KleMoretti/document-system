@@ -9,6 +9,7 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 
 @Configuration
 @EnableWebSocket
+@ConditionalOnRole({ServiceRole.REALTIME, ServiceRole.ALL})
 public class WebSocketConfig implements WebSocketConfigurer {
   private final DocumentSocketHandler handler;
   private final String[] allowedOrigins;

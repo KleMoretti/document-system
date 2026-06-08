@@ -19,6 +19,12 @@ public class Application {
   }
 
   @Bean
+  ServiceRole serviceRole(@Value("${app.service-role:all}") String raw) {
+    return ServiceRole.from(raw);
+  }
+
+  @Bean
+  @ConditionalOnRole({ServiceRole.AUTH, ServiceRole.ALL})
   BCryptPasswordEncoder passwordEncoder(@Value("${app.bcrypt-cost}") int bcryptCost) {
     return new BCryptPasswordEncoder(bcryptCost);
   }
@@ -32,6 +38,7 @@ public class Application {
   }
 
   @Bean
+  @ConditionalOnRole({ServiceRole.DOCUMENT, ServiceRole.REALTIME, ServiceRole.ALL})
   JedisPooled jedis(
       @Value("${app.redis-host}") String host,
       @Value("${app.redis-port}") int port,

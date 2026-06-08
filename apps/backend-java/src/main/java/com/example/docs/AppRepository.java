@@ -16,6 +16,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 @org.springframework.stereotype.Repository
+@ConditionalOnRole(ServiceRole.ALL)
 public class AppRepository {
   private final JdbcTemplate jdbc;
 

@@ -15,13 +15,14 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api")
+@ConditionalOnRole({ServiceRole.AUTH, ServiceRole.ALL})
 public class AuthController {
-  private final AppRepository repository;
+  private final AuthRepository repository;
   private final BCryptPasswordEncoder passwordEncoder;
   private final JwtManager jwtManager;
 
   public AuthController(
-      AppRepository repository, BCryptPasswordEncoder passwordEncoder, JwtManager jwtManager) {
+      AuthRepository repository, BCryptPasswordEncoder passwordEncoder, JwtManager jwtManager) {
     this.repository = repository;
     this.passwordEncoder = passwordEncoder;
     this.jwtManager = jwtManager;
@@ -41,7 +42,7 @@ public class AuthController {
 
   @PostMapping("/auth/login")
   AuthResponse login(@RequestBody LoginRequest req) {
-    AppRepository.LoginUser user;
+    AuthRepository.LoginUser user;
     try {
       user = repository.findUserForLogin(req.email());
     } catch (EmptyResultDataAccessException ex) {

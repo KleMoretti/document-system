@@ -10,7 +10,14 @@ import org.springframework.stereotype.Component;
 import redis.clients.jedis.JedisPooled;
 import redis.clients.jedis.JedisPubSub;
 
+/**
+ * Redis pub/sub bus for realtime service.
+ * Subscribes to doc:* channels and forwards remote events to local
+ * WebSocket connections. Also publishes local sync:update / presence:update
+ * events so other realtime instances can relay them.
+ */
 @Component
+@ConditionalOnRole({ServiceRole.REALTIME, ServiceRole.ALL})
 public class RedisBus {
   private static final Logger log = LoggerFactory.getLogger(RedisBus.class);
   private final JedisPooled jedis;
@@ -27,6 +34,7 @@ public class RedisBus {
     this.consumer = consumer;
   }
 
+  /** Publish a sync/presence message from local WebSocket to other realtime instances. */
   public void publish(String docId, JsonNode body) {
     try {
       var envelope = mapper.createObjectNode();

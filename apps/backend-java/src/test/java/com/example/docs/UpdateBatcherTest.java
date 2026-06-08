@@ -16,7 +16,7 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 class UpdateBatcherTest {
   @Test
   void flushesMultipleUpdatesTogetherWhenMaxBatchSizeIsReached() throws Exception {
-    var repository = mock(AppRepository.class);
+    var repository = mock(RealtimeRepository.class);
     var batcher = new UpdateBatcher(repository, new MetricsRegistry(), Duration.ofHours(1), 2);
 
     var first =
@@ -48,7 +48,7 @@ class UpdateBatcherTest {
   @Test
   void canBeCreatedAsSpringBeanWithRepositoryAndMetricsDependencies() {
     var context = new AnnotationConfigApplicationContext();
-    context.registerBean(AppRepository.class, () -> mock(AppRepository.class));
+    context.registerBean(RealtimeRepository.class, () -> mock(RealtimeRepository.class));
     context.registerBean(MetricsRegistry.class);
     context.registerBean(UpdateBatcher.class);
 

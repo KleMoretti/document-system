@@ -16,15 +16,22 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/documents")
+@ConditionalOnRole({ServiceRole.DOCUMENT, ServiceRole.ALL})
 public class DocumentController {
-  private final AppRepository repository;
-  private final AuthController auth;
-  private final DocumentSocketHandler socketHandler;
+  private final DocumentRepository repository;
+  private final BearerTokenVerifier verifier;
+  private final UserInfoResolver userInfo;
+  private final RedisPublisher redisPublisher;
 
-  public DocumentController(AppRepository repository, AuthController auth, DocumentSocketHandler socketHandler) {
+  public DocumentController(
+      DocumentRepository repository,
+      BearerTokenVerifier verifier,
+      UserInfoResolver userInfo,
+      RedisPublisher redisPublisher) {
     this.repository = repository;
-    this.auth = auth;
-    this.socketHandler = socketHandler;
+    this.verifier = verifier;
+    this.userInfo = userInfo;
+    this.redisPublisher = redisPublisher;
   }
 
   @GetMapping
@@ -32,7 +39,7 @@ public class DocumentController {
       @RequestHeader("Authorization") String authorization,
       @RequestParam(defaultValue = "") String query,
       @RequestParam(defaultValue = "active") String status) {
-    var claims = auth.claims(authorization);
+    var claims = verifier.claims(authorization);
     return repository.listDocuments(claims.userId(), query, status);
   }
 
@@ -40,14 +47,14 @@ public class DocumentController {
   @ResponseStatus(HttpStatus.CREATED)
   DocumentView create(
       @RequestHeader("Authorization") String authorization, @RequestBody CreateDocumentRequest req) {
-    var claims = auth.claims(authorization);
+    var claims = verifier.claims(authorization);
     var title = req.title() == null || req.title().isBlank() ? "Untitled document" : req.title();
     return repository.createDocument(claims.userId(), title);
   }
 
   @GetMapping("/{docId}")
   DocumentView get(@RequestHeader("Authorization") String authorization, @PathVariable String docId) {
-    var claims = auth.claims(authorization);
+    var claims = verifier.claims(authorization);
     return repository.getDocument(claims.userId(), docId);
   }
 
@@ -56,7 +63,7 @@ public class DocumentController {
       @RequestHeader("Authorization") String authorization,
       @PathVariable String docId,
       @RequestBody RenameDocumentRequest req) {
-    var claims = auth.claims(authorization);
+    var claims = verifier.claims(authorization);
     var doc = repository.getDocument(claims.userId(), docId);
     if (!Roles.canEdit(doc.role())) {
       throw new ForbiddenException("You cannot rename this document.");
@@ -68,7 +75,7 @@ public class DocumentController {
   @DeleteMapping("/{docId}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   void delete(@RequestHeader("Authorization") String authorization, @PathVariable String docId) {
-    var claims = auth.claims(authorization);
+    var claims = verifier.claims(authorization);
     var doc = repository.getDocument(claims.userId(), docId);
     if (!"owner".equals(doc.role())) {
       throw new ForbiddenException("Only the owner can delete this document.");
@@ -78,19 +85,21 @@ public class DocumentController {
 
   @PostMapping("/{docId}/restore")
   DocumentView restore(@RequestHeader("Authorization") String authorization, @PathVariable String docId) {
-    var claims = auth.claims(authorization);
+    var claims = verifier.claims(authorization);
     var doc = repository.getDocumentIncludingDeleted(claims.userId(), docId);
     if (!"owner".equals(doc.role())) {
       throw new ForbiddenException("Only the owner can restore this document.");
     }
     repository.restoreDocument(docId);
+    redisPublisher.publishDocumentRestored(docId);
     return repository.getDocument(claims.userId(), docId);
   }
 
   @GetMapping("/{docId}/shares")
   List<ShareView> shares(@RequestHeader("Authorization") String authorization, @PathVariable String docId) {
     requireSharePermission(authorization, docId);
-    return repository.listShares(docId);
+    var shares = repository.listShares(docId);
+    return userInfo.fillShareUsers(shares);
   }
 
   @PostMapping("/{docId}/shares")
@@ -103,7 +112,8 @@ public class DocumentController {
     if (!Roles.valid(req.role()) || "owner".equals(req.role())) {
       throw new BadRequestException("Role must be editor or viewer.");
     }
-    repository.shareDocument(docId, req);
+    var userId = userInfo.resolveUserIdByEmail(req.email());
+    repository.shareDocument(docId, userId, req.role());
   }
 
   @DeleteMapping("/{docId}/shares/{userId}")
@@ -148,19 +158,20 @@ public class DocumentController {
       @RequestHeader("Authorization") String authorization,
       @PathVariable String docId,
       @PathVariable String versionId) {
-    var claims = auth.claims(authorization);
+    var claims = verifier.claims(authorization);
     var doc = repository.getDocument(claims.userId(), docId);
     if (!Roles.canEdit(doc.role())) {
       throw new ForbiddenException("You cannot restore a version for this document.");
     }
     repository.restoreVersion(docId, versionId);
-    socketHandler.broadcastDocumentRestored(docId);
+    redisPublisher.publishDocumentRestored(docId);
   }
 
   @GetMapping("/{docId}/comments")
   List<CommentThread> comments(@RequestHeader("Authorization") String authorization, @PathVariable String docId) {
     requireDocumentAccess(authorization, docId);
-    return repository.listComments(docId);
+    var comments = repository.listComments(docId);
+    return userInfo.fillCommentAuthors(comments);
   }
 
   @PostMapping("/{docId}/comments")
@@ -174,8 +185,9 @@ public class DocumentController {
       throw new BadRequestException("Comment body is required.");
     }
     var comment = repository.createComment(docId, claims.userId(), req.body().trim());
-    socketHandler.broadcastCommentEvent(docId, "comment:created", comment);
-    return comment;
+    var filled = userInfo.fillCommentAuthors(List.of(comment)).get(0);
+    redisPublisher.publishCommentEvent(docId, "comment:created", filled);
+    return filled;
   }
 
   @PostMapping("/{docId}/comments/{commentId}/replies")
@@ -190,8 +202,9 @@ public class DocumentController {
       throw new BadRequestException("Reply body is required.");
     }
     var comment = repository.addReply(docId, commentId, claims.userId(), req.body().trim());
-    socketHandler.broadcastCommentEvent(docId, "comment:updated", comment);
-    return comment;
+    var filled = userInfo.fillCommentAuthors(List.of(comment)).get(0);
+    redisPublisher.publishCommentEvent(docId, "comment:updated", filled);
+    return filled;
   }
 
   @PatchMapping("/{docId}/comments/{commentId}")
@@ -200,18 +213,19 @@ public class DocumentController {
       @PathVariable String docId,
       @PathVariable String commentId,
       @RequestBody UpdateCommentRequest req) {
-    var claims = auth.claims(authorization);
+    var claims = verifier.claims(authorization);
     var doc = repository.getDocument(claims.userId(), docId);
     if (!Roles.canEdit(doc.role())) {
       throw new ForbiddenException("Only editors can update comments.");
     }
     var comment = repository.updateComment(docId, commentId, req);
-    socketHandler.broadcastCommentEvent(docId, req.resolved() == null ? "comment:updated" : "comment:resolved", comment);
-    return comment;
+    var filled = userInfo.fillCommentAuthors(List.of(comment)).get(0);
+    redisPublisher.publishCommentEvent(docId, req.resolved() == null ? "comment:updated" : "comment:resolved", filled);
+    return filled;
   }
 
   private void requireSharePermission(String authorization, String docId) {
-    var claims = auth.claims(authorization);
+    var claims = verifier.claims(authorization);
     var doc = repository.getDocument(claims.userId(), docId);
     if (!Roles.canShare(doc.role())) {
       throw new ForbiddenException("Only the owner can manage sharing.");
@@ -219,7 +233,7 @@ public class DocumentController {
   }
 
   private UserClaims requireDocumentAccess(String authorization, String docId) {
-    var claims = auth.claims(authorization);
+    var claims = verifier.claims(authorization);
     repository.getDocument(claims.userId(), docId);
     return claims;
   }

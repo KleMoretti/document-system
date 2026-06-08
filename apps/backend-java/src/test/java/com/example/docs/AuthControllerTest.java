@@ -22,7 +22,7 @@ class AuthControllerTest {
 
   @Test
   void unknownLoginEmailUsesSameUnauthorizedErrorAsWrongPassword() {
-    var repository = mock(AppRepository.class);
+    var repository = mock(AuthRepository.class);
     when(repository.findUserForLogin("missing@example.com"))
         .thenThrow(new EmptyResultDataAccessException(1));
     var controller =
